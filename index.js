@@ -246,9 +246,21 @@ async function parseOfficialWeatherChannel() {
     const channel = await client.channels.fetch(process.env.WEATHER_CHANNEL_ID).catch(() => null);
     if (!channel) return null;
 
-    const messages = await channel.messages.fetch({ limit: 1 });
-    const msg = messages.first();
-    if (!msg) return null;
+    console.log("🌦️ Weather channel:", channel.id, channel.name);
+
+    const messages = await channel.messages.fetch({ limit: 5 });
+    console.log("🌦️ Last 5 weather messages:");
+    for (const m of messages.values()) {
+     console.log(
+        "—",
+       m.createdAt?.toISOString?.() || m.createdTimestamp,
+       "id:", m.id,
+       "author:", m.author?.tag,
+       "embeds:", m.embeds?.length || 0,
+       "contentLen:", (m.content || "").length
+    );
+}
+const msg = messages.first();
 
     // свежесть (90 секунд) — как ты хотел
     const messageAge = Date.now() - msg.createdTimestamp;
@@ -261,6 +273,17 @@ async function parseOfficialWeatherChannel() {
     // 1) EMBED (как у Dawn) — основной вариант
     if (msg.embeds && msg.embeds.length > 0) {
       const e = msg.embeds[0];
+
+    const e = msg.embeds?.[0];
+    if (!e) {
+        console.log("🌦️ No embed in chosen message");
+        return null;
+}
+
+        console.log("🌦️ EMBED title:", e.title);
+        console.log("🌦️ EMBED desc:", e.description);
+        console.log("🌦️ EMBED fields:", (e.fields || []).map(f => ({ name: f.name, value: f.value })));
+        console.log("🌦️ Mentions roles size:", msg.mentions?.roles?.size || 0);
 
       const desc = e.description || "";
       let weatherName = null;
@@ -657,6 +680,7 @@ client.on('ready', async () => {
 });
 
 client.login(process.env.USER_TOKEN);
+
 
 
 
