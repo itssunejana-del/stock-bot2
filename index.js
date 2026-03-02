@@ -239,63 +239,53 @@ function extractHHMM(text) {
   return m ? m[1] : null;
 }
 
-// ===== ПАРСИНГ ОФИЦИАЛЬНОГО БОТА (ПОГОДА) =====
+// ===== ПАРСИНГ ПОГОДЫ ИЗ COMPONENTS =====
 async function parseOfficialWeatherChannel() {
     try {
         const channel = client.channels.cache.get(process.env.WEATHER_CHANNEL_ID);
         if (!channel) return null;
         
-        const messages = await channel.messages.fetch({ limit: 5 });
-        console.log(`🌦️ Найдено сообщений погоды: ${messages.size}`);
+        // Берём только последнее сообщение
+        const messages = await channel.messages.fetch({ limit: 1 });
+        const msg = messages.first();
         
-        for (const [id, msg] of messages) {
-            console.log(`--- Сообщение ${id} ---`);
-            console.log(`Время: ${new Date(msg.createdTimestamp).toLocaleString()}`);
-            console.log(`Автор: ${msg.author.username}`);
-            console.log(`Components: ${msg.components?.length || 0}`);
-            console.log(`Embeds: ${msg.embeds?.length || 0}`);
-            console.log(`Content: "${msg.content?.substring(0, 50)}"`);
+        if (!msg || !msg.components?.length) {
+            console.log('🌤️ Нет сообщения о погоде');
+            return null;
         }
         
-        // Берём самое свежее
-        const msg = messages.first();
-        if (!msg) return null;
-        
+        // Проверка на свежесть (5 минут максимум)
         const messageAge = Date.now() - msg.createdTimestamp;
-        const maxAge = 5 * 60 * 1000;
+        const maxAge = 5 * 60 * 1000; // 5 минут
         
         if (messageAge > maxAge) {
-            console.log(`⏰ Погода слишком старая: ${Math.round(messageAge/60000)} мин`);
+            console.log(`⏰ Погода устарела (${Math.round(messageAge/60000)} мин назад)`);
             return null;
         }
         
-        if (!msg.components?.length) {
-            console.log('❌ Нет components в сообщении погоды');
-            return null;
-        }
-        
+        // Вытаскиваем текст из components
         const text = extractTextFromComponents(msg.components);
-        console.log('📝 Текст погоды:', text);
+        console.log('🌦️ Текст погоды:', text);
         
-        // Парсим погоду
-        const weatherMatch = text.match(/now @?(\w+)/i);
-        const startMatch = text.match(/start[:\s]+(\d{1,2}:\d{2})/i);
-        const endMatch = text.match(/end[:\s]+(\d{1,2}:\d{2})/i);
+        // Парсим время начала и конца
+        // Ищем "Start: ... HH:MM" или "Start: ... HH:MM"
+        const startMatch = text.match(/Start:.*?(\d{1,2}:\d{2})/i);
+        const endMatch = text.match(/End:.*?(\d{1,2}:\d{2})/i);
         
-        if (weatherMatch) {
-            console.log(`✅ Найдена погода: ${weatherMatch[1]}`);
+        if (startMatch && endMatch) {
+            console.log(`✅ Погода: старт ${startMatch[1]}, конец ${endMatch[1]}`);
             return {
-                weather: weatherMatch[1],
-                startTime: startMatch?.[1] || null,
-                endTime: endMatch?.[1] || null
+                startTime: startMatch[1],
+                endTime: endMatch[1]
+                // Название погоды не нужно, только время
             };
         }
         
-        console.log('❌ Не удалось распарсить погоду из текста');
+        console.log('❌ Не удалось распарсить время погоды');
         return null;
         
     } catch (error) {
-        console.error('Ошибка парсинга погоды:', error.message);
+        console.error('❌ Ошибка парсинга погоды:', error.message);
         return null;
     }
 }
@@ -456,31 +446,13 @@ async function sendToDiscord() {
         });
     }
     
-    // Погода (только если есть и это official режим)
+    // Погода
     if (stockData.weather && stockData.source === 'official') {
-        const weather = stockData.weather;
-        const weatherEmoji = EMOJIS[weather.weather] || '☁️';
-        
-        let timeLeft = '';
-        if (weather.endTime) {
-            const now = new Date();
-            const [hours, minutes] = weather.endTime.split(':').map(Number);
-            const end = new Date();
-            end.setHours(hours, minutes, 0);
-            
-            if (end < now) {
-                end.setDate(end.getDate() + 1);
-            }
-            
-            const minsLeft = Math.round((end - now) / 60000);
-            timeLeft = ` (${minsLeft} min left)`;
-        }
-        
-        fields.push({
-            name: '☁️ WEATHER',
-            value: `• ${weather.weather} ${weatherEmoji}\n• Start: ${weather.startTime || '??'}\n• End: ${weather.endTime || '??'}`,
-            inline: false
-        });
+    fields.push({
+        name: '☀️ Weather',
+        value: `• Starts: ${stockData.weather.startTime}\n• Ends: ${stockData.weather.endTime}`,
+        inline: false
+    });
     }
     
     // Добавляем текст о backup режиме если нужно
@@ -629,6 +601,7 @@ client.on('ready', async () => {
 });
 
 client.login(process.env.USER_TOKEN);
+
 
 
 
