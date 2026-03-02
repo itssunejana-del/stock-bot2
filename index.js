@@ -242,110 +242,119 @@ function extractHHMM(text) {
 // ===== ПАРСИНГ ОФИЦИАЛЬНОГО БОТА (ПОГОДА) =====
 async function parseOfficialWeatherChannel() {
   try {
-    // ВАЖНО: иногда cache.get не находит — fetch надёжнее
+    // Берём канал надёжно через fetch
     const channel = await client.channels.fetch(process.env.WEATHER_CHANNEL_ID).catch(() => null);
-    if (!channel) return null;
+    if (!channel) {
+      console.log("❌ Weather channel not found");
+      return null;
+    }
 
     console.log("🌦️ Weather channel:", channel.id, channel.name);
 
+    // Берём последние 5 сообщений
     const messages = await channel.messages.fetch({ limit: 5 });
+
     console.log("🌦️ Last 5 weather messages:");
     for (const m of messages.values()) {
-     console.log(
+      console.log(
         "—",
-       m.createdAt?.toISOString?.() || m.createdTimestamp,
-       "id:", m.id,
-       "author:", m.author?.tag,
-       "embeds:", m.embeds?.length || 0,
-       "contentLen:", (m.content || "").length
-    );
-}
-const msg = messages.first();
+        new Date(m.createdTimestamp).toISOString(),
+        "id:", m.id,
+        "author:", m.author?.tag,
+        "embeds:", m.embeds?.length || 0,
+        "contentLen:", (m.content || "").length
+      );
+    }
 
-    // свежесть (90 секунд) — как ты хотел
+    // Берём САМОЕ последнее сообщение
+    const msg = messages.first();
+    if (!msg) {
+      console.log("❌ No messages found in weather channel");
+      return null;
+    }
+
+    // Проверка свежести
     const messageAge = Date.now() - msg.createdTimestamp;
     const maxAge = 90 * 1000;
+
+    console.log("🌦️ Message age (sec):", Math.round(messageAge / 1000));
+
     if (messageAge > maxAge) {
-      console.log(`⏰ Сообщение погоды слишком старое (${Math.round(messageAge / 60000)} мин)`);
+      console.log("⏰ Weather message too old");
       return null;
     }
 
-    // 1) EMBED (как у Dawn) — основной вариант
-    if (msg.embeds && msg.embeds.length > 0) {
-      const e = msg.embeds[0];
-
-    const e = msg.embeds?.[0];
-    if (!e) {
-        console.log("🌦️ No embed in chosen message");
-        return null;
-}
-
-        console.log("🌦️ EMBED title:", e.title);
-        console.log("🌦️ EMBED desc:", e.description);
-        console.log("🌦️ EMBED fields:", (e.fields || []).map(f => ({ name: f.name, value: f.value })));
-        console.log("🌦️ Mentions roles size:", msg.mentions?.roles?.size || 0);
-
-      const desc = e.description || "";
-      let weatherName = null;
-
-      // 1.1) Самый надёжный способ: роль-упоминание (Storm/Snow/Starfall и т.д.)
-      if (msg.mentions && msg.mentions.roles && msg.mentions.roles.size > 0) {
-        const role = msg.mentions.roles.first();
-        if (role && role.name) weatherName = role.name;
-      }
-
-      // 1.2) Если роль не распарсилась — берём из текста "It's now ..."
-      if (!weatherName) {
-        const mNow = desc.match(/it'?s\s+now\s+(.+?)[!.\n]/i);
-        if (mNow) weatherName = cleanWeatherName(mNow[1]);
-      }
-
-      // 1.3) Если и так не получилось — чистим весь desc
-      if (!weatherName) {
-        weatherName = cleanWeatherName(desc);
-      }
-
-      // Start/End обычно лежат в embed.fields
-      let startRaw = null;
-      let endRaw = null;
-
-      if (e.fields && e.fields.length > 0) {
-        for (const f of e.fields) {
-          const fname = (f.name || "").toLowerCase();
-          if (fname.includes("start")) startRaw = f.value;
-          if (fname.includes("end")) endRaw = f.value;
-        }
-      }
-
-      const startTime = extractHHMM(startRaw);
-      const endTime = extractHHMM(endRaw);
-
-      if (weatherName) {
-        return { weather: weatherName, startTime, endTime };
-      }
+    // Если нет embed — сразу выходим
+    if (!msg.embeds || msg.embeds.length === 0) {
+      console.log("❌ No embed in last message");
       return null;
     }
 
-    // 2) Fallback: components (если вдруг формат изменят обратно)
-    if (!msg.components || msg.components.length === 0) return null;
+    const embed = msg.embeds[0];
 
-    const text = extractTextFromComponents(msg.components);
+    console.log("🌦️ EMBED title:", embed.title);
+    console.log("🌦️ EMBED desc:", embed.description);
+    console.log("🌦️ EMBED fields:", embed.fields);
 
-    const weatherMatch = text.match(/now\s+@?(.+?)[\n!]/i);
-    const startMatch = text.match(/start[:\s]+(.+)/i);
-    const endMatch = text.match(/end[:\s]+(.+)/i);
+    const desc = embed.description || "";
+    let weatherName = null;
 
-    const weatherName = cleanWeatherName(weatherMatch ? weatherMatch[1] : null);
-    const startTime = extractHHMM(startMatch ? startMatch[1] : null);
-    const endTime = extractHHMM(endMatch ? endMatch[1] : null);
+    // 1️⃣ Попробуем вытащить роль через <@&ID>
+    const roleIdMatch = desc.match(/<@&(\d+)>/);
+    if (roleIdMatch) {
+      const roleId = roleIdMatch[1];
+      console.log("🌦️ Found role ID:", roleId);
 
-    if (weatherName) {
-      return { weather: weatherName, startTime, endTime };
+      const role = msg.guild.roles.cache.get(roleId);
+      if (role) {
+        weatherName = role.name;
+        console.log("🌦️ Resolved role name:", weatherName);
+      }
     }
 
-    return null;
+    // 2️⃣ Если роли нет — берём из текста "It's now ..."
+    if (!weatherName) {
+      const match = desc.match(/it'?s\s+now\s+(.+?)[!.\n]/i);
+      if (match) {
+        weatherName = cleanWeatherName(match[1]);
+        console.log("🌦️ Parsed from text:", weatherName);
+      }
+    }
+
+    if (!weatherName) {
+      console.log("❌ Weather name not parsed");
+      return null;
+    }
+
+    // === Start / End ===
+    let startRaw = null;
+    let endRaw = null;
+
+    if (embed.fields && embed.fields.length > 0) {
+      for (const field of embed.fields) {
+        const fname = (field.name || "").toLowerCase();
+        if (fname.includes("start")) startRaw = field.value;
+        if (fname.includes("end")) endRaw = field.value;
+      }
+    }
+
+    console.log("🌦️ Raw start:", startRaw);
+    console.log("🌦️ Raw end:", endRaw);
+
+    const startTime = extractHHMM(startRaw);
+    const endTime = extractHHMM(endRaw);
+
+    console.log("🌦️ Parsed start:", startTime);
+    console.log("🌦️ Parsed end:", endTime);
+
+    return {
+      weather: weatherName,
+      startTime,
+      endTime
+    };
+
   } catch (error) {
-    console.error("Ошибка парсинга погоды:", error.message);
+    console.error("❌ Weather parsing error:", error);
     return null;
   }
 }
