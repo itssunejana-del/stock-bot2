@@ -19,27 +19,31 @@ app.listen(port, () => {
 
 const client = new Client();
 
-// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
+// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ С ID СТИКЕРОВ =====
 const TARGET_ITEMS = {
     'cherry': {
         keywords: ['cherry', '🍒'],
         emoji: '🍒',
-        display_name: 'Cherry'
+        display_name: 'Cherry',
+        sticker_id: "CAACAgIAAxkBAAEQnoFpnyHlfKoDssWIpZHbKrjgBUkgAQACy5AAAv894EjYncv41k4_XzoE"
     },
     'cabbage': {
         keywords: ['cabbage', '🥬'],
         emoji: '🥬',
-        display_name: 'Cabbage'
+        display_name: 'Cabbage',
+        sticker_id: "CAACAgIAAxkBAAEQnoNpnyHvhLutfLJmqqqqk8_TWy-8wAACZ5YAAho06UipuXAdrrQYXToE"
     },
     'bamboo': {
         keywords: ['bamboo', '🎋'],
         emoji: '🎋',
-        display_name: 'Bamboo'
+        display_name: 'Bamboo',
+        sticker_id: "CAACAgIAAxkBAAEQpw1ppGFmoB8w-C71IZOkeBOG029w5QAC4psAAsOUIEnsw-M936B9BjoE"
     },
     'mango': {
         keywords: ['mango', '🥭'],
         emoji: '🥭',
-        display_name: 'Mango'
+        display_name: 'Mango',
+        sticker_id: "CAACAgIAAxkBAAEQpw9ppGFstEgOkpR-HLILv_ugOZVViQACkZYAAu_cIUnaEdl_e13gzDoE"
     }
 };
 
@@ -251,7 +255,14 @@ async function checkAll() {
             if (found.length > 0) {
                 console.log(`🎯 НАЙДЕНЫ ЦЕЛЕВЫЕ ПРЕДМЕТЫ: ${found.map(f => f.display_name).join(', ')}`);
                 
-                // Отправляем в Telegram
+                // Отправляем стикеры для найденных предметов
+                for (const item of found) {
+                    if (item.sticker_id) {
+                        await sendTelegramSticker(item.sticker_id);
+                    }
+                }
+                
+                // Отправляем сообщение со списком
                 const time = new Date().toLocaleTimeString();
                 let message = `🎯 <b>Найдены предметы в ${time}</b>\n\n`;
                 
@@ -262,12 +273,6 @@ async function checkAll() {
                 }
                 
                 await sendTelegram(message);
-                
-                // Отправляем стикеры для найденных предметов
-                for (const item of found) {
-                    // Здесь нужно добавить ID стикеров из твоего старого кода
-                    // await sendTelegramSticker(item.stickerId);
-                }
             } else {
                 console.log('📊 Целевые предметы не найдены');
                 
