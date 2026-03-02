@@ -219,68 +219,68 @@ async function parseOfficialWeatherChannel() {
     try {
         const channel = client.channels.cache.get(process.env.WEATHER_CHANNEL_ID);
         if (!channel) return null;
-        
+
         const messages = await channel.messages.fetch({ limit: 1 });
         const msg = messages.first();
-        
-        if (!msg || !msg.components?.length) {
-            console.log('🌤️ Нет сообщения о погоде');
+
+        if (!msg || !msg.components || msg.components.length === 0) {
+            console.log("🌤️ Нет сообщения о погоде");
             return null;
         }
-        
+
         // Проверка на свежесть (5 минут)
         const messageAge = Date.now() - msg.createdTimestamp;
         const maxAge = 5 * 60 * 1000;
-        
+
         if (messageAge > maxAge) {
-            console.log(`⏰ Погода устарела (${Math.round(messageAge/60000)} мин назад)`);
+            console.log(`⏰ Погода устарела (${Math.round(messageAge / 60000)} мин назад)`);
             return null;
         }
-        
+
         const text = extractTextFromComponents(msg.components);
-        
-        // Парсим название погоды (из <@&ROLE_ID>)
-        const nameMatch = text.match(/It's now <@&(\d+)>!/);
+
+        // === НАЗВАНИЕ ПОГОДЫ ===
         let weatherName = null;
-        
+        const nameMatch = text.match(/It's now <@&(\d+)>!/);
+
         if (nameMatch) {
-            // Пробуем найти имя роли через кэш
-            for (const [, guild] of client.guilds.cache) {
-                const role = guild.roles.cache.get(nameMatch[1]);
-                if (role) {
-                    weatherName = role.name;
-                    break;
-                }
+            const roleId = nameMatch[1];
+            const resolvedName = await findRoleName(roleId);
+            if (resolvedName) {
+                weatherName = resolvedName;
             }
         }
-        
-        // Парсим UNIX-таймштампы
+
+        // === UNIX ВРЕМЯ ===
         const startMatch = text.match(/Start:.*?<t:(\d+):F>/i);
         const endMatch = text.match(/End:.*?<t:(\d+):F>/i);
-        
-        if (startMatch && endMatch) {
-            const startDate = new Date(parseInt(startMatch[1]) * 1000);
-            const endDate = new Date(parseInt(endMatch[1]) * 1000);
-            
-            const startTime = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
-            const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-            
-            console.log(`✅ Погода: ${weatherName || 'Unknown'}, старт ${startTime}, конец ${endTime}`);
-            return {
-                name: weatherName || 'Unknown',
-                startTime: startTime,
-                endTime: endTime
-            };
+
+        if (!startMatch || !endMatch) {
+            console.log("❌ Не удалось распарсить время погоды");
+            return null;
         }
-        
-        console.log('❌ Не удалось распарсить время погоды');
-        return null;
-        
+
+        const startDate = new Date(parseInt(startMatch[1]) * 1000);
+        const endDate = new Date(parseInt(endMatch[1]) * 1000);
+
+        // UTC формат HH:MM
+        const startTime = startDate.toISOString().slice(11, 16);
+        const endTime = endDate.toISOString().slice(11, 16);
+
+        console.log(`✅ Погода: ${weatherName || "Unknown"}, старт ${startTime}, конец ${endTime}`);
+
+        return {
+            name: weatherName || "Unknown",
+            startTime: startTime,
+            endTime: endTime
+        };
+
     } catch (error) {
-        console.error('❌ Ошибка парсинга погоды:', error.message);
+        console.error("❌ Ошибка парсинга погоды:", error.message);
         return null;
     }
-}
+            }
+
 
 // ===== ПАРСИНГ BACKUP БОТА (СЕМЕНА) =====
 async function parseBackupSeedChannel() {
@@ -595,6 +595,7 @@ client.on('ready', async () => {
 });
 
 client.login(process.env.USER_TOKEN);
+
 
 
 
