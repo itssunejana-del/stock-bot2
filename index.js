@@ -19,7 +19,7 @@ app.listen(port, () => {
 
 const client = new Client();
 
-// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ (ТОЛЬКО НУЖНЫЕ) =====
+// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
 const TARGET_ITEMS = {
     'cherry': {
         keywords: ['cherry', '🍒'],
@@ -357,22 +357,43 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА =====
+// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА (ТОЛЬКО ДЛЯ ЦЕЛЕВЫХ) =====
 async function checkAll() {
+    // Проверяем команды из Telegram
     await checkTelegramCommands();
     
+    // Получаем последнее сообщение
     const items = await parseSeedChannel();
     
-    if (items && items.length > 0) {
-        console.log('⚠️ Polling: найдено пропущенное сообщение');
+    // Отправляем сообщение ТОЛЬКО если:
+    // 1. Есть предметы
+    // 2. Бот включен
+    // 3. Есть целевые предметы
+    if (items && items.length > 0 && botEnabled) {
+        const found = checkTargetItems(items);
         
-        if (botEnabled) {
+        if (found.length > 0) {
+            console.log('⚠️ Polling: найдены целевые предметы в пропущенном сообщении');
+            
             const time = new Date().toLocaleTimeString();
-            let message = `📋 <b>Пропущенный сток в ${time}</b>\n\n`;
+            let message = `⚠️ <b>Внимание! Найдены предметы (пропущенный сток) в ${time}</b>\n\n`;
+            
             for (const item of items) {
-                message += `• ${item.name} — ${item.count}\n`;
+                const isTarget = found.some(f => f.display_name === item.name);
+                const emoji = isTarget ? '✅ ' : '';
+                message += `${emoji}• ${item.name} — ${item.count}\n`;
             }
+            
+            // Отправляем стикеры для найденных
+            for (const item of found) {
+                if (item.sticker_id) {
+                    await sendTelegramSticker(item.sticker_id);
+                }
+            }
+            
             await sendTelegram(message);
+        } else {
+            console.log('⏭️ Polling: пропущенное сообщение без целевых предметов, пропускаем');
         }
     }
 }
