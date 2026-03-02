@@ -67,11 +67,11 @@ async function loadState() {
     try {
         const data = await fs.readFile('state.json', 'utf8');
         const loaded = JSON.parse(data);
-        // Убеждаемся, что processedIds существует
+        // Убеждаемся, что все поля существуют
         stockData = {
             seeds: loaded.seeds || [],
             lastUpdate: loaded.lastUpdate || null,
-            processedIds: loaded.processedIds || []
+            processedIds: Array.isArray(loaded.processedIds) ? loaded.processedIds : []
         };
         console.log(`📂 Загружено состояние: ${stockData.processedIds.length} обработанных сообщений`);
     } catch (error) {
@@ -175,8 +175,8 @@ async function parseSeedChannel() {
             return null;
         }
         
-        // Защита от дублей
-        if (stockData.processedIds && stockData.processedIds.includes(msg.id)) {
+        // Защита от дублей (с проверкой на массив)
+        if (stockData.processedIds && Array.isArray(stockData.processedIds) && stockData.processedIds.includes(msg.id)) {
             console.log(`⏭️ Сообщение ${msg.id} уже обработано`);
             return null;
         }
@@ -208,6 +208,9 @@ async function parseSeedChannel() {
         }
         
         // Добавляем ID в обработанные
+        if (!stockData.processedIds) {
+            stockData.processedIds = [];
+        }
         stockData.processedIds.push(msg.id);
         if (stockData.processedIds.length > 100) {
             stockData.processedIds.shift();
