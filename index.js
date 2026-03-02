@@ -19,7 +19,7 @@ app.listen(port, () => {
 
 const client = new Client();
 
-// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
+// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ (ТОЛЬКО НУЖНЫЕ) =====
 const TARGET_ITEMS = {
     'cherry': {
         keywords: ['cherry', '🍒'],
@@ -44,13 +44,6 @@ const TARGET_ITEMS = {
         emoji: '🥭',
         display_name: 'Mango',
         sticker_id: "CAACAgIAAxkBAAEQpw9ppGFstEgOkpR-HLILv_ugOZVViQACkZYAAu_cIUnaEdl_e13gzDoE"
-    },
-    // ===== ТЕСТОВАЯ МОРКОВЬ (потом удалим) =====
-    'carrot': {
-        keywords: ['carrot', '🥕'],
-        emoji: '🥕',
-        display_name: 'Carrot',
-        sticker_id: "CAACAgIAAxkBAAEQnoVpnyH24p9XG865neBZzotLJBqyTwACzp0AAtmT-UgP-Ruhrq3S3joE"
     }
 };
 
@@ -63,9 +56,9 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_BOT_CHAT_ID;
 const TELEGRAM_STICKER_CHANNEL = process.env.STOCKS_TELEGRAM_CHANNEL;
 
 // ===== УПРАВЛЕНИЕ БОТОМ =====
-let botEnabled = true;  // По умолчанию включен
-let processedIds = [];  // ID обработанных сообщений
-let lastCommandTime = 0; // Защита от повторных команд
+let botEnabled = true;
+let processedIds = [];
+let lastCommandTime = 0;
 
 // ===== ЗАГРУЗКА/СОХРАНЕНИЕ СОСТОЯНИЯ =====
 async function loadState() {
@@ -254,7 +247,6 @@ async function checkTelegramCommands() {
                 const chatId = update.message.chat.id;
                 const commandTime = update.message.date * 1000;
                 
-                // Игнорируем старые команды
                 if (commandTime < lastCommandTime) continue;
                 
                 if (chatId.toString() === TELEGRAM_CHAT_ID) {
@@ -275,7 +267,8 @@ async function checkTelegramCommands() {
                     } else if (text === '/status') {
                         lastCommandTime = commandTime;
                         const status = botEnabled ? '✅ Включен' : '🔇 Отключен';
-                        await sendTelegram(`📊 <b>Статус бота</b>\n• Режим: ${status}\n• Обработано сообщений: ${processedIds.length}\n• Отслеживаю: 🍒 🥬 🎋 🥕`);
+                        const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
+                        await sendTelegram(`📊 <b>Статус бота</b>\n• Режим: ${status}\n• Обработано сообщений: ${processedIds.length}\n• Отслеживаю: ${targets}`);
                     }
                 }
             }
@@ -288,13 +281,9 @@ async function checkTelegramCommands() {
 // ===== МГНОВЕННАЯ ОБРАБОТКА ЧЕРЕЗ WEBSOCKET =====
 client.on('messageCreate', async (message) => {
     try {
-        // Игнорируем сообщения не из нужного канала
         if (message.channel.id !== STOCKS_CHANNEL_ID) return;
-        
-        // Игнорируем сообщения не от Dawn
         if (message.author.username.toLowerCase() !== 'dawnbot') return;
         
-        // Защита от дублей
         if (processedIds.includes(message.id)) {
             console.log(`⏭️ WebSocket: сообщение ${message.id} уже обработано`);
             return;
@@ -302,11 +291,9 @@ client.on('messageCreate', async (message) => {
         
         console.log(`⚡ WebSocket: получено новое сообщение ${message.id}`);
         
-        // Получаем текст из компонентов
         const text = extractTextFromComponents(message.components);
         if (!text) return;
         
-        // Парсим предметы
         const lines = text.split('\n');
         const items = [];
         
@@ -325,29 +312,24 @@ client.on('messageCreate', async (message) => {
         
         if (items.length === 0) return;
         
-        // Проверяем целевые предметы
         const found = checkTargetItems(items);
         
-        // Сохраняем ID
         processedIds.push(message.id);
         if (processedIds.length > 100) processedIds.shift();
         await saveState();
         
-        // Отправляем уведомления (только если бот включен)
         if (botEnabled) {
             const time = new Date().toLocaleTimeString();
             
             if (found.length > 0) {
                 console.log(`🎯 WebSocket: НАЙДЕНЫ ЦЕЛЕВЫЕ ПРЕДМЕТЫ: ${found.map(f => f.display_name).join(', ')}`);
                 
-                // Стикеры
                 for (const item of found) {
                     if (item.sticker_id) {
                         await sendTelegramSticker(item.sticker_id);
                     }
                 }
                 
-                // Сообщение
                 let message = `⚡ <b>Мгновенно! Найдены предметы в ${time}</b>\n\n`;
                 for (const item of items) {
                     const isTarget = found.some(f => f.display_name === item.name);
@@ -375,15 +357,12 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА (ТОЛЬКО ДЛЯ ПРОПУЩЕННЫХ) =====
+// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА =====
 async function checkAll() {
-    // Проверяем команды из Telegram
     await checkTelegramCommands();
     
-    // Получаем последнее сообщение
     const items = await parseSeedChannel();
     
-    // Если нашли сообщение, которое не было обработано WebSocket-ом
     if (items && items.length > 0) {
         console.log('⚠️ Polling: найдено пропущенное сообщение');
         
@@ -403,10 +382,9 @@ client.on('ready', async () => {
     console.log(`✅ Залогинен как ${client.user.tag}`);
     await loadState();
     
-    // Отправляем приветствие
-    await sendTelegram('🤖 <b>Бот запущен в режиме WebSocket!</b>\nКоманды: /enable, /disable, /status');
+    const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
+    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n📝 Команды: /enable, /disable, /status`);
     
-    // Запускаем периодическую проверку (только для команд и пропущенных)
     setInterval(checkAll, 30 * 1000);
     console.log('👀 Бот запущен и слушает WebSocket');
 });
