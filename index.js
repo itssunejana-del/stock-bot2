@@ -12,6 +12,11 @@ app.get('/', (req, res) => {
     res.send('🌱 Garden Horizons Bot is running!');
 });
 
+// Добавляем эндпоинт для самопинга
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+});
+
 app.listen(port, () => {
     console.log(`✅ Web server running on port ${port}`);
 });
@@ -59,6 +64,7 @@ const TELEGRAM_STICKER_CHANNEL = process.env.STOCKS_TELEGRAM_CHANNEL;
 let botEnabled = true;
 let processedIds = [];
 let lastCommandTime = 0;
+let reconnectAttempts = 0;
 
 // ===== ЗАГРУЗКА/СОХРАНЕНИЕ СОСТОЯНИЯ =====
 async function loadState() {
@@ -330,23 +336,23 @@ client.on('messageCreate', async (message) => {
                     }
                 }
                 
-                let message = `⚡ <b>Мгновенно! Найдены предметы в ${time}</b>\n\n`;
+                let messageText = `⚡ <b>Мгновенно! Найдены предметы в ${time}</b>\n\n`;
                 for (const item of items) {
                     const isTarget = found.some(f => f.display_name === item.name);
                     const emoji = isTarget ? '✅ ' : '';
-                    message += `${emoji}• ${item.name} — ${item.count}\n`;
+                    messageText += `${emoji}• ${item.name} — ${item.count}\n`;
                 }
-                await sendTelegram(message);
+                await sendTelegram(messageText);
                 
             } else {
                 console.log(`📊 WebSocket: целевые предметы не найдены`);
                 
-                let message = `📊 <b>Сток в ${time}</b>\n`;
-                message += `🎯 Целевые предметы: не найдены\n\n`;
+                let messageText = `📊 <b>Сток в ${time}</b>\n`;
+                messageText += `🎯 Целевые предметы: не найдены\n\n`;
                 for (const item of items) {
-                    message += `• ${item.name} — ${item.count}\n`;
+                    messageText += `• ${item.name} — ${item.count}\n`;
                 }
-                await sendTelegram(message);
+                await sendTelegram(messageText);
             }
         } else {
             console.log(`🔇 WebSocket: бот отключен, уведомления не отправлены`);
@@ -376,12 +382,12 @@ async function checkAll() {
             console.log('⚠️ Polling: найдены целевые предметы в пропущенном сообщении');
             
             const time = new Date().toLocaleTimeString();
-            let message = `⚠️ <b>Внимание! Найдены предметы (пропущенный сток) в ${time}</b>\n\n`;
+            let messageText = `⚠️ <b>Внимание! Найдены предметы (пропущенный сток) в ${time}</b>\n\n`;
             
             for (const item of items) {
                 const isTarget = found.some(f => f.display_name === item.name);
                 const emoji = isTarget ? '✅ ' : '';
-                message += `${emoji}• ${item.name} — ${item.count}\n`;
+                messageText += `${emoji}• ${item.name} — ${item.count}\n`;
             }
             
             // Отправляем стикеры для найденных
@@ -391,12 +397,59 @@ async function checkAll() {
                 }
             }
             
-            await sendTelegram(message);
+            await sendTelegram(messageText);
         } else {
             console.log('⏭️ Polling: пропущенное сообщение без целевых предметов, пропускаем');
         }
     }
 }
+
+// ===== ОБРАБОТКА ОТКЛЮЧЕНИЯ =====
+client.on('disconnect', async () => {
+    console.log('⚠️ WebSocket отключен!');
+    await sendTelegram('⚠️ <b>Потеря соединения с Discord</b>\nПытаюсь переподключиться...');
+    reconnectAttempts++;
+});
+
+// ===== ОБРАБОТКА ОШИБОК СОЕДИНЕНИЯ =====
+client.on('error', async (error) => {
+    console.error('❌ Ошибка WebSocket:', error.message);
+    await sendTelegram(`❌ <b>Ошибка WebSocket:</b> ${error.message}`);
+});
+
+// ===== ПРОВЕРКА ЗДОРОВЬЯ СОЕДИНЕНИЯ =====
+setInterval(async () => {
+    try {
+        if (!client.ws?.ping) {
+            console.log('⚠️ WebSocket ping недоступен');
+            return;
+        }
+        
+        console.log(`📡 WebSocket пинг: ${client.ws.ping}ms`);
+        
+        // Если пинг слишком большой - возможно проблема
+        if (client.ws.ping > 5000) {
+            console.log(`⚠️ Высокий пинг: ${client.ws.ping}ms`);
+            await sendTelegram(`⚠️ <b>Высокий пинг WebSocket</b>\nПинг: ${client.ws.ping}ms`);
+        }
+        
+        // Сбрасываем счетчик попыток при успешном соединении
+        reconnectAttempts = 0;
+        
+    } catch (error) {
+        console.error('❌ Ошибка проверки пинга:', error.message);
+    }
+}, 60000); // Проверка каждую минуту
+
+// ===== САМОПИНГ ДЛЯ RENDER (каждые 5 минут) =====
+setInterval(async () => {
+    try {
+        const response = await axios.get(`https://stock-bot2.onrender.com/health`);
+        console.log(`🏓 Самопинг: ${response.status} - ${response.data.time}`);
+    } catch (error) {
+        console.error('❌ Ошибка самопинга:', error.message);
+    }
+}, 300000); // Каждые 5 минут
 
 // ===== ЗАПУСК =====
 client.on('ready', async () => {
