@@ -66,10 +66,21 @@ let stockData = {
 async function loadState() {
     try {
         const data = await fs.readFile('state.json', 'utf8');
-        stockData = JSON.parse(data);
-        console.log('📂 Загружено состояние');
+        const loaded = JSON.parse(data);
+        // Убеждаемся, что processedIds существует
+        stockData = {
+            seeds: loaded.seeds || [],
+            lastUpdate: loaded.lastUpdate || null,
+            processedIds: loaded.processedIds || []
+        };
+        console.log(`📂 Загружено состояние: ${stockData.processedIds.length} обработанных сообщений`);
     } catch (error) {
         console.log('🆕 Новое состояние');
+        stockData = {
+            seeds: [],
+            lastUpdate: null,
+            processedIds: []
+        };
     }
 }
 
@@ -86,7 +97,7 @@ async function sendTelegram(text, parseMode = 'HTML') {
             text: text,
             parse_mode: parseMode
         };
-        const response = await axios.post(url, data);
+        await axios.post(url, data);
         console.log('✅ Отправлено в Telegram');
         return true;
     } catch (error) {
@@ -165,7 +176,7 @@ async function parseSeedChannel() {
         }
         
         // Защита от дублей
-        if (stockData.processedIds.includes(msg.id)) {
+        if (stockData.processedIds && stockData.processedIds.includes(msg.id)) {
             console.log(`⏭️ Сообщение ${msg.id} уже обработано`);
             return null;
         }
