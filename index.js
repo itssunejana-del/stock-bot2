@@ -19,7 +19,7 @@ app.listen(port, () => {
 
 const client = new Client();
 
-// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ С ID СТИКЕРОВ =====
+// ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
 const TARGET_ITEMS = {
     'cherry': {
         keywords: ['cherry', '🍒'],
@@ -44,6 +44,13 @@ const TARGET_ITEMS = {
         emoji: '🥭',
         display_name: 'Mango',
         sticker_id: "CAACAgIAAxkBAAEQpw9ppGFstEgOkpR-HLILv_ugOZVViQACkZYAAu_cIUnaEdl_e13gzDoE"
+    },
+    // ===== ТЕСТОВАЯ МОРКОВЬ (потом удалим) =====
+    'carrot': {
+        keywords: ['carrot', '🥕'],
+        emoji: '🥕',
+        display_name: 'Carrot',
+        sticker_id: "CAACAgIAAxkBAAEQnoVpnyH24p9XG865neBZzotLJBqyTwACzp0AAtmT-UgP-Ruhrq3S3joE"
     }
 };
 
@@ -55,41 +62,38 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_BOT_CHAT_ID;
 const TELEGRAM_STICKER_CHANNEL = process.env.STOCKS_TELEGRAM_CHANNEL;
 
-// ===== Хранилище данных =====
-let stockData = {
-    seeds: [],
-    lastUpdate: null,
-    processedIds: []
-};
+// ===== УПРАВЛЕНИЕ БОТОМ =====
+let botEnabled = true;  // По умолчанию включен
+let processedIds = [];  // ID обработанных сообщений
 
 // ===== ЗАГРУЗКА/СОХРАНЕНИЕ СОСТОЯНИЯ =====
 async function loadState() {
     try {
         const data = await fs.readFile('state.json', 'utf8');
         const loaded = JSON.parse(data);
-        // Убеждаемся, что все поля существуют
-        stockData = {
-            seeds: loaded.seeds || [],
-            lastUpdate: loaded.lastUpdate || null,
-            processedIds: Array.isArray(loaded.processedIds) ? loaded.processedIds : []
-        };
-        console.log(`📂 Загружено состояние: ${stockData.processedIds.length} обработанных сообщений`);
+        processedIds = Array.isArray(loaded.processedIds) ? loaded.processedIds : [];
+        console.log(`📂 Загружено состояние: ${processedIds.length} обработанных сообщений`);
     } catch (error) {
         console.log('🆕 Новое состояние');
-        stockData = {
-            seeds: [],
-            lastUpdate: null,
-            processedIds: []
-        };
+        processedIds = [];
     }
 }
 
 async function saveState() {
-    await fs.writeFile('state.json', JSON.stringify(stockData, null, 2));
+    try {
+        await fs.writeFile('state.json', JSON.stringify({ processedIds }, null, 2));
+        console.log('💾 Состояние сохранено');
+    } catch (error) {
+        console.error('❌ Ошибка сохранения:', error.message);
+    }
 }
 
 // ===== ФУНКЦИЯ ОТПРАВКИ В TELEGRAM =====
 async function sendTelegram(text, parseMode = 'HTML') {
+    if (!botEnabled) {
+        console.log('🔇 Бот отключен, сообщение не отправлено');
+        return false;
+    }
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
         const data = {
@@ -107,6 +111,10 @@ async function sendTelegram(text, parseMode = 'HTML') {
 }
 
 async function sendTelegramSticker(stickerId) {
+    if (!botEnabled) {
+        console.log('🔇 Бот отключен, стикер не отправлен');
+        return false;
+    }
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendSticker`;
         const data = {
@@ -175,8 +183,8 @@ async function parseSeedChannel() {
             return null;
         }
         
-        // Защита от дублей (с проверкой на массив)
-        if (stockData.processedIds && Array.isArray(stockData.processedIds) && stockData.processedIds.includes(msg.id)) {
+        // Защита от дублей
+        if (processedIds.includes(msg.id)) {
             console.log(`⏭️ Сообщение ${msg.id} уже обработано`);
             return null;
         }
@@ -208,13 +216,11 @@ async function parseSeedChannel() {
         }
         
         // Добавляем ID в обработанные
-        if (!stockData.processedIds) {
-            stockData.processedIds = [];
+        processedIds.push(msg.id);
+        if (processedIds.length > 100) {
+            processedIds.shift();
         }
-        stockData.processedIds.push(msg.id);
-        if (stockData.processedIds.length > 100) {
-            stockData.processedIds.shift();
-        }
+        await saveState();
         
         return items.length ? items : null;
         
@@ -249,59 +255,83 @@ function checkTargetItems(items) {
     return found;
 }
 
+// ===== ОБРАБОТКА КОМАНД ИЗ TELEGRAM =====
+async function checkTelegramCommands() {
+    try {
+        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=-1`;
+        const response = await axios.get(url);
+        const updates = response.data.result;
+        
+        for (const update of updates) {
+            if (update.message && update.message.text) {
+                const text = update.message.text.toLowerCase();
+                const chatId = update.message.chat.id;
+                
+                if (chatId.toString() === TELEGRAM_CHAT_ID) {
+                    if (text === '/enable' || text === '/start') {
+                        botEnabled = true;
+                        await sendTelegram('✅ Бот включен');
+                    } else if (text === '/disable' || text === '/stop') {
+                        botEnabled = false;
+                        await sendTelegram('🔇 Бот отключен');
+                    } else if (text === '/status') {
+                        const status = botEnabled ? '✅ Включен' : '🔇 Отключен';
+                        await sendTelegram(`📊 Статус бота: ${status}\n📨 Обработано сообщений: ${processedIds.length}`);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('❌ Ошибка проверки команд:', error.message);
+    }
+}
+
 // ===== ОСНОВНАЯ ПРОВЕРКА =====
 async function checkAll() {
     console.log(`\n🕒 ${new Date().toLocaleTimeString()} - Проверка...`);
     
+    // Проверяем команды из Telegram
+    await checkTelegramCommands();
+    
     const seeds = await parseSeedChannel();
     
     if (seeds && seeds.length > 0) {
-        // Проверяем, изменились ли семена
-        if (JSON.stringify(seeds) !== JSON.stringify(stockData.seeds)) {
-            console.log('🔄 Семена изменились!');
-            stockData.seeds = seeds;
-            stockData.lastUpdate = new Date().toISOString();
-            await saveState();
+        // Проверяем целевые предметы
+        const found = checkTargetItems(seeds);
+        
+        if (found.length > 0) {
+            console.log(`🎯 НАЙДЕНЫ ЦЕЛЕВЫЕ ПРЕДМЕТЫ: ${found.map(f => f.display_name).join(', ')}`);
             
-            // Проверяем целевые предметы
-            const found = checkTargetItems(seeds);
-            
-            if (found.length > 0) {
-                console.log(`🎯 НАЙДЕНЫ ЦЕЛЕВЫЕ ПРЕДМЕТЫ: ${found.map(f => f.display_name).join(', ')}`);
-                
-                // Отправляем стикеры для найденных предметов
-                for (const item of found) {
-                    if (item.sticker_id) {
-                        await sendTelegramSticker(item.sticker_id);
-                    }
+            // Отправляем стикеры для найденных предметов
+            for (const item of found) {
+                if (item.sticker_id) {
+                    await sendTelegramSticker(item.sticker_id);
                 }
-                
-                // Отправляем сообщение со списком
-                const time = new Date().toLocaleTimeString();
-                let message = `🎯 <b>Найдены предметы в ${time}</b>\n\n`;
-                
-                for (const item of seeds) {
-                    const isTarget = found.some(f => f.display_name === item.name);
-                    const emoji = isTarget ? '✅ ' : '';
-                    message += `${emoji}• ${item.name} — ${item.count}\n`;
-                }
-                
-                await sendTelegram(message);
-            } else {
-                console.log('📊 Целевые предметы не найдены');
-                
-                const time = new Date().toLocaleTimeString();
-                let message = `📊 <b>Сток в ${time}</b>\n`;
-                message += `🎯 Целевые предметы: не найдены\n\n`;
-                
-                for (const item of seeds) {
-                    message += `• ${item.name} — ${item.count}\n`;
-                }
-                
-                await sendTelegram(message);
             }
+            
+            // Отправляем сообщение со списком
+            const time = new Date().toLocaleTimeString();
+            let message = `🎯 <b>Найдены предметы в ${time}</b>\n\n`;
+            
+            for (const item of seeds) {
+                const isTarget = found.some(f => f.display_name === item.name);
+                const emoji = isTarget ? '✅ ' : '';
+                message += `${emoji}• ${item.name} — ${item.count}\n`;
+            }
+            
+            await sendTelegram(message);
         } else {
-            console.log('⏺️ Семена без изменений');
+            console.log('📊 Целевые предметы не найдены');
+            
+            const time = new Date().toLocaleTimeString();
+            let message = `📊 <b>Сток в ${time}</b>\n`;
+            message += `🎯 Целевые предметы: не найдены\n\n`;
+            
+            for (const item of seeds) {
+                message += `• ${item.name} — ${item.count}\n`;
+            }
+            
+            await sendTelegram(message);
         }
     } else {
         console.log('⚠️ Нет данных от бота Dawn');
@@ -312,7 +342,10 @@ async function checkAll() {
 client.on('ready', async () => {
     console.log(`✅ Залогинен как ${client.user.tag}`);
     await loadState();
-    await checkAll();
+    
+    // Отправляем приветствие
+    await sendTelegram('🤖 <b>Бот запущен!</b>\nКоманды: /enable, /disable, /status');
+    
     setInterval(checkAll, 30 * 1000);
     console.log('👀 Бот запущен и следит за каналом');
 });
