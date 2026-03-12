@@ -4,6 +4,10 @@ const axios = require('axios');
 const fs = require('fs').promises;
 const express = require('express');
 
+// Библиотеки для прокси
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+
 // ===== Express сервер для Render =====
 const app = express();
 const port = process.env.PORT || 3000;
@@ -21,7 +25,35 @@ app.listen(port, () => {
 });
 // ======================================
 
-const client = new Client();
+// ===== НАСТРОЙКА ПРОКСИ =====
+const PROXY_URL = process.env.PROXY_URL;
+let proxyAgent = null;
+
+if (PROXY_URL) {
+    try {
+        console.log('🔌 Настройка прокси...');
+        if (PROXY_URL.startsWith('socks')) {
+            proxyAgent = new SocksProxyAgent(PROXY_URL);
+            console.log('✅ SOCKS прокси настроен');
+        } else {
+            proxyAgent = new HttpsProxyAgent(PROXY_URL);
+            console.log('✅ HTTP прокси настроен');
+        }
+    } catch (error) {
+        console.error('❌ Ошибка настройки прокси:', error.message);
+    }
+}
+
+// Создаем клиента с поддержкой прокси
+const clientOptions = {};
+if (proxyAgent) {
+    clientOptions.http = {
+        agent: proxyAgent
+    };
+    console.log('🔌 Прокси будет использоваться для подключения к Discord');
+}
+
+const client = new Client(clientOptions);
 
 // ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
 const TARGET_ITEMS = {
@@ -267,11 +299,9 @@ async function checkTelegramCommands() {
                         lastCommandTime = commandTime;
                         const status = botEnabled ? '✅ Включен' : '🔇 Отключен';
                         const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
-                        let errorInfo = '';
-                        if (lastError) {
-                            errorInfo = `\n❌ Последняя ошибка: ${lastError}`;
-                        }
-                        await sendTelegram(`📊 <b>Статус бота</b>\n• Режим: ${status}\n• Обработано сообщений: ${processedIds.length}\n• Отслеживаю: ${targets}${errorInfo}`);
+                        const proxyStatus = PROXY_URL ? '✅ Да' : '❌ Нет';
+                        let errorInfo = lastError ? `\n❌ Последняя ошибка: ${lastError}` : '';
+                        await sendTelegram(`📊 <b>Статус бота</b>\n• Режим: ${status}\n• Прокси: ${proxyStatus}\n• Обработано сообщений: ${processedIds.length}\n• Отслеживаю: ${targets}${errorInfo}`);
                     }
                 }
             }
@@ -419,11 +449,6 @@ client.on('error', async (error) => {
     await sendTelegram(`❌ <b>Ошибка WebSocket:</b> ${error.message}`);
 });
 
-// ===== ОБРАБОТКА ПРЕДУПРЕЖДЕНИЙ =====
-process.on('warning', (warning) => {
-    console.warn('⚠️ Предупреждение:', warning.message);
-});
-
 // ===== ДИАГНОСТИКА WEBSOCKET =====
 client.ws.on('shardReady', async (shardId) => {
     console.log(`✅ Шард ${shardId} готов`);
@@ -464,7 +489,6 @@ setInterval(async () => {
         const status = shard.status;
         const ping = shard.ping;
         
-        // Статусы шардов: 0=CONNECTING, 1=CONNECTED, 2=RECONNECTING, 3=IDLE, 4=NEARLY, 5=DISCONNECTED
         const statusMap = {
             0: 'CONNECTING',
             1: 'CONNECTED',
@@ -476,18 +500,11 @@ setInterval(async () => {
         
         console.log(`📡 Шард статус: ${statusMap[status] || status}, пинг: ${ping || 'N/A'}ms`);
         
-        // Если шард отключен или в процессе переподключения слишком долго
         if (status === 5 || (status === 2 && reconnectAttempts > 3)) {
             console.log('🔄 Обнаружена критическая проблема, перезапускаю шард...');
             await sendTelegram(`🔄 Критическая проблема WebSocket\nСтатус: ${statusMap[status]}\nПопыток: ${reconnectAttempts}`);
             shard.destroy({ reset: true });
             reconnectAttempts++;
-        }
-        
-        // Если пинг пропал, но шард вроде как подключен
-        if ((ping === null || ping === -1) && status === 1) {
-            console.log('⚠️ Шард в состоянии CONNECTED, но пинг отсутствует');
-            lastError = 'Шард подключен, но пинг отсутствует';
         }
         
         errorCount = 0;
@@ -500,10 +517,10 @@ setInterval(async () => {
         if (errorCount > 5) {
             console.log('🔥 Критическая ошибка мониторинга, выполняю перезапуск...');
             await sendTelegram('🔥 Критическая ошибка мониторинга, перезапускаюсь...');
-            process.exit(1); // Render перезапустит процесс
+            process.exit(1);
         }
     }
-}, 30000); // Каждые 30 секунд
+}, 30000);
 
 // ===== ПРОВЕРКА HTTP ДОСТУПНОСТИ DISCORD =====
 async function checkDiscordHttp() {
@@ -553,7 +570,7 @@ setInterval(async () => {
     console.log('\n🔍 Запуск диагностики...');
     
     // Проверяем HTTP доступность Discord
-    const httpOk = await checkDiscordHttp();
+    await checkDiscordHttp();
     
     // Проверяем WebSocket статус
     if (client.ws) {
@@ -569,18 +586,11 @@ setInterval(async () => {
             };
             console.log(`📊 WebSocket статус: ${statusMap[shard.status] || shard.status}`);
             console.log(`📊 WebSocket пинг: ${shard.ping || 'N/A'}ms`);
-            
-            if (!httpOk && shard.status !== 1) {
-                console.log('⚠️ Discord недоступен через HTTP и WebSocket отключен');
-                if (errorCount++ > 3) {
-                    await sendTelegram('⚠️ Discord недоступен более 2 минут');
-                }
-            }
         }
     }
     
     console.log('🔍 Диагностика завершена\n');
-}, 120000); // Каждые 2 минуты
+}, 120000);
 
 // ===== САМОПИНГ ДЛЯ RENDER =====
 setInterval(async () => {
@@ -590,7 +600,7 @@ setInterval(async () => {
     } catch (error) {
         console.error('❌ Ошибка самопинга:', error.message);
     }
-}, 300000); // Каждые 5 минут
+}, 300000);
 
 // ===== ЗАПУСК =====
 client.on('ready', async () => {
@@ -598,25 +608,13 @@ client.on('ready', async () => {
     await loadState();
     
     const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
-    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n📝 Команды: /enable, /disable, /status`);
+    const proxyStatus = PROXY_URL ? '✅ через прокси' : '❌ без прокси';
+    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n🌐 Прокси: ${proxyStatus}\n📝 Команды: /enable, /disable, /status`);
     
     setInterval(checkAll, 30 * 1000);
     console.log('👀 Бот запущен и слушает WebSocket');
     errorCount = 0;
     lastError = null;
-});
-
-// ===== ОБРАБОТКА ЗАВЕРШЕНИЯ =====
-process.on('SIGTERM', async () => {
-    console.log('⚠️ Получен сигнал SIGTERM, завершаю работу...');
-    await sendTelegram('⚠️ Бот завершает работу (SIGTERM)');
-    process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-    console.log('⚠️ Получен сигнал SIGINT, завершаю работу...');
-    await sendTelegram('⚠️ Бот завершает работу (SIGINT)');
-    process.exit(0);
 });
 
 client.login(process.env.USER_TOKEN);
