@@ -12,7 +12,6 @@ app.get('/', (req, res) => {
     res.send('🌱 Garden Horizons Bot is running!');
 });
 
-// Добавляем эндпоинт для самопинга
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', time: new Date().toISOString() });
 });
@@ -65,6 +64,8 @@ let botEnabled = true;
 let processedIds = [];
 let lastCommandTime = 0;
 let reconnectAttempts = 0;
+let lastError = null;
+let errorCount = 0;
 
 // ===== ЗАГРУЗКА/СОХРАНЕНИЕ СОСТОЯНИЯ =====
 async function loadState() {
@@ -90,10 +91,6 @@ async function saveState() {
 
 // ===== ФУНКЦИЯ ОТПРАВКИ В TELEGRAM =====
 async function sendTelegram(text, parseMode = 'HTML') {
-    if (!botEnabled) {
-        console.log('🔇 Бот отключен, сообщение не отправлено');
-        return false;
-    }
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
         const data = {
@@ -111,10 +108,6 @@ async function sendTelegram(text, parseMode = 'HTML') {
 }
 
 async function sendTelegramSticker(stickerId) {
-    if (!botEnabled) {
-        console.log('🔇 Бот отключен, стикер не отправлен');
-        return false;
-    }
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendSticker`;
         const data = {
@@ -274,7 +267,11 @@ async function checkTelegramCommands() {
                         lastCommandTime = commandTime;
                         const status = botEnabled ? '✅ Включен' : '🔇 Отключен';
                         const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
-                        await sendTelegram(`📊 <b>Статус бота</b>\n• Режим: ${status}\n• Обработано сообщений: ${processedIds.length}\n• Отслеживаю: ${targets}`);
+                        let errorInfo = '';
+                        if (lastError) {
+                            errorInfo = `\n❌ Последняя ошибка: ${lastError}`;
+                        }
+                        await sendTelegram(`📊 <b>Статус бота</b>\n• Режим: ${status}\n• Обработано сообщений: ${processedIds.length}\n• Отслеживаю: ${targets}${errorInfo}`);
                     }
                 }
             }
@@ -360,6 +357,8 @@ client.on('messageCreate', async (message) => {
         
     } catch (error) {
         console.error('❌ Ошибка в WebSocket обработчике:', error.message);
+        lastError = `WebSocket: ${error.message}`;
+        await sendTelegram(`❌ <b>Ошибка WebSocket</b>\n${error.message}`);
     }
 });
 
@@ -405,43 +404,185 @@ async function checkAll() {
 }
 
 // ===== ОБРАБОТКА ОТКЛЮЧЕНИЯ =====
-client.on('disconnect', async () => {
-    console.log('⚠️ WebSocket отключен!');
-    await sendTelegram('⚠️ <b>Потеря соединения с Discord</b>\nПытаюсь переподключиться...');
+client.on('disconnect', async (event) => {
+    const errorMsg = event?.reason || 'Неизвестная причина';
+    console.log(`⚠️ WebSocket отключен! Причина: ${errorMsg}`);
+    lastError = `Отключение: ${errorMsg}`;
+    await sendTelegram(`⚠️ <b>WebSocket отключен</b>\nПричина: ${errorMsg}\nПопытка ${reconnectAttempts + 1}`);
     reconnectAttempts++;
 });
 
 // ===== ОБРАБОТКА ОШИБОК СОЕДИНЕНИЯ =====
 client.on('error', async (error) => {
-    console.error('❌ Ошибка WebSocket:', error.message);
+    console.error('❌ Ошибка WebSocket:', error);
+    lastError = error.message;
     await sendTelegram(`❌ <b>Ошибка WebSocket:</b> ${error.message}`);
 });
 
-// ===== ПРОВЕРКА ЗДОРОВЬЯ СОЕДИНЕНИЯ =====
+// ===== ОБРАБОТКА ПРЕДУПРЕЖДЕНИЙ =====
+process.on('warning', (warning) => {
+    console.warn('⚠️ Предупреждение:', warning.message);
+});
+
+// ===== ДИАГНОСТИКА WEBSOCKET =====
+client.ws.on('shardReady', async (shardId) => {
+    console.log(`✅ Шард ${shardId} готов`);
+    errorCount = 0;
+    reconnectAttempts = 0;
+    lastError = null;
+    await sendTelegram(`✅ WebSocket шард ${shardId} готов к работе`);
+});
+
+client.ws.on('shardResumed', async (shardId, replayed) => {
+    console.log(`🔄 Шард ${shardId} возобновил работу, пропущено событий: ${replayed}`);
+    await sendTelegram(`🔄 WebSocket возобновил работу\nПропущено событий: ${replayed}`);
+});
+
+client.ws.on('shardDisconnect', async (event, shardId) => {
+    const closeCode = event?.code || 'неизвестный код';
+    const reason = event?.reason || 'без объяснения';
+    console.log(`⚠️ Шард ${shardId} отключен. Код: ${closeCode}, Причина: ${reason}`);
+    lastError = `Шард ${shardId} отключен. Код: ${closeCode}`;
+    await sendTelegram(`⚠️ <b>WebSocket шард ${shardId} отключен</b>\nКод: ${closeCode}\nПричина: ${reason}`);
+});
+
+// ===== УСИЛЕННЫЙ МОНИТОРИНГ СОЕДИНЕНИЯ =====
 setInterval(async () => {
     try {
-        if (!client.ws?.ping) {
-            console.log('⚠️ WebSocket ping недоступен');
+        if (!client.ws) {
+            console.log('⚠️ WebSocket менеджер недоступен');
             return;
         }
         
-        console.log(`📡 WebSocket пинг: ${client.ws.ping}ms`);
+        const shard = client.ws.shards?.first();
         
-        // Если пинг слишком большой - возможно проблема
-        if (client.ws.ping > 5000) {
-            console.log(`⚠️ Высокий пинг: ${client.ws.ping}ms`);
-            await sendTelegram(`⚠️ <b>Высокий пинг WebSocket</b>\nПинг: ${client.ws.ping}ms`);
+        if (!shard) {
+            console.log('⚠️ Нет активных шардов');
+            return;
         }
         
-        // Сбрасываем счетчик попыток при успешном соединении
-        reconnectAttempts = 0;
+        const status = shard.status;
+        const ping = shard.ping;
+        
+        // Статусы шардов: 0=CONNECTING, 1=CONNECTED, 2=RECONNECTING, 3=IDLE, 4=NEARLY, 5=DISCONNECTED
+        const statusMap = {
+            0: 'CONNECTING',
+            1: 'CONNECTED',
+            2: 'RECONNECTING',
+            3: 'IDLE',
+            4: 'NEARLY',
+            5: 'DISCONNECTED'
+        };
+        
+        console.log(`📡 Шард статус: ${statusMap[status] || status}, пинг: ${ping || 'N/A'}ms`);
+        
+        // Если шард отключен или в процессе переподключения слишком долго
+        if (status === 5 || (status === 2 && reconnectAttempts > 3)) {
+            console.log('🔄 Обнаружена критическая проблема, перезапускаю шард...');
+            await sendTelegram(`🔄 Критическая проблема WebSocket\nСтатус: ${statusMap[status]}\nПопыток: ${reconnectAttempts}`);
+            shard.destroy({ reset: true });
+            reconnectAttempts++;
+        }
+        
+        // Если пинг пропал, но шард вроде как подключен
+        if ((ping === null || ping === -1) && status === 1) {
+            console.log('⚠️ Шард в состоянии CONNECTED, но пинг отсутствует');
+            lastError = 'Шард подключен, но пинг отсутствует';
+        }
+        
+        errorCount = 0;
         
     } catch (error) {
-        console.error('❌ Ошибка проверки пинга:', error.message);
+        console.error('❌ Ошибка мониторинга:', error.message);
+        lastError = `Мониторинг: ${error.message}`;
+        errorCount++;
+        
+        if (errorCount > 5) {
+            console.log('🔥 Критическая ошибка мониторинга, выполняю перезапуск...');
+            await sendTelegram('🔥 Критическая ошибка мониторинга, перезапускаюсь...');
+            process.exit(1); // Render перезапустит процесс
+        }
     }
-}, 60000); // Проверка каждую минуту
+}, 30000); // Каждые 30 секунд
 
-// ===== САМОПИНГ ДЛЯ RENDER (каждые 5 минут) =====
+// ===== ПРОВЕРКА HTTP ДОСТУПНОСТИ DISCORD =====
+async function checkDiscordHttp() {
+    try {
+        const response = await axios.get('https://discord.com/api/v9/gateway', {
+            timeout: 10000,
+            validateStatus: false
+        });
+        
+        if (response.status === 200) {
+            console.log('🌐 Discord HTTP доступен');
+            lastError = null;
+            return true;
+        } else if (response.status === 429) {
+            const retryAfter = response.headers['retry-after'];
+            console.log(`🌐 Discord HTTP: 429 Too Many Requests, retry after ${retryAfter}s`);
+            lastError = `Discord 429, retry after ${retryAfter}s`;
+            await sendTelegram(`⚠️ <b>Discord rate limit</b>\nПовторите через ${retryAfter} сек`);
+        } else if (response.status === 403 || response.status === 401) {
+            console.log(`🌐 Discord HTTP: ${response.status} - Проблема с токеном`);
+            lastError = `Ошибка авторизации: ${response.status}`;
+            await sendTelegram(`🚨 <b>Проблема с токеном Discord</b>\nКод: ${response.status}\nПроверьте USER_TOKEN`);
+        } else {
+            console.log(`🌐 Discord HTTP: ${response.status} - ${response.statusText}`);
+            lastError = `HTTP ${response.status}`;
+        }
+    } catch (error) {
+        if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+            console.log('🌐 Discord HTTP: Сервер недоступен (ECONNREFUSED/ENOTFOUND)');
+            lastError = 'Discord недоступен (ECONNREFUSED)';
+        } else if (error.code === 'ETIMEDOUT') {
+            console.log('🌐 Discord HTTP: Таймаут соединения');
+            lastError = 'Discord таймаут';
+        } else if (error.response) {
+            console.log(`🌐 Discord HTTP: ${error.response.status} - ${error.response.statusText}`);
+            lastError = `Discord: ${error.response.status}`;
+        } else {
+            console.log(`🌐 Discord HTTP: ${error.message}`);
+            lastError = `Discord: ${error.message}`;
+        }
+    }
+    return false;
+}
+
+// ===== ДИАГНОСТИЧЕСКАЯ ПРОВЕРКА =====
+setInterval(async () => {
+    console.log('\n🔍 Запуск диагностики...');
+    
+    // Проверяем HTTP доступность Discord
+    const httpOk = await checkDiscordHttp();
+    
+    // Проверяем WebSocket статус
+    if (client.ws) {
+        const shard = client.ws.shards?.first();
+        if (shard) {
+            const statusMap = {
+                0: 'CONNECTING',
+                1: 'CONNECTED',
+                2: 'RECONNECTING',
+                3: 'IDLE',
+                4: 'NEARLY',
+                5: 'DISCONNECTED'
+            };
+            console.log(`📊 WebSocket статус: ${statusMap[shard.status] || shard.status}`);
+            console.log(`📊 WebSocket пинг: ${shard.ping || 'N/A'}ms`);
+            
+            if (!httpOk && shard.status !== 1) {
+                console.log('⚠️ Discord недоступен через HTTP и WebSocket отключен');
+                if (errorCount++ > 3) {
+                    await sendTelegram('⚠️ Discord недоступен более 2 минут');
+                }
+            }
+        }
+    }
+    
+    console.log('🔍 Диагностика завершена\n');
+}, 120000); // Каждые 2 минуты
+
+// ===== САМОПИНГ ДЛЯ RENDER =====
 setInterval(async () => {
     try {
         const response = await axios.get(`https://stock-bot2.onrender.com/health`);
@@ -461,6 +602,21 @@ client.on('ready', async () => {
     
     setInterval(checkAll, 30 * 1000);
     console.log('👀 Бот запущен и слушает WebSocket');
+    errorCount = 0;
+    lastError = null;
+});
+
+// ===== ОБРАБОТКА ЗАВЕРШЕНИЯ =====
+process.on('SIGTERM', async () => {
+    console.log('⚠️ Получен сигнал SIGTERM, завершаю работу...');
+    await sendTelegram('⚠️ Бот завершает работу (SIGTERM)');
+    process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+    console.log('⚠️ Получен сигнал SIGINT, завершаю работу...');
+    await sendTelegram('⚠️ Бот завершает работу (SIGINT)');
+    process.exit(0);
 });
 
 client.login(process.env.USER_TOKEN);
