@@ -29,6 +29,7 @@ const PROXY_PORTS = ['1080', '1081', '1082', '1083', '1084', '1085']; // Осн�
 let currentProxyIndex = 0;
 let proxyAgent = null;
 let proxyFailCount = 0;
+let currentProxyUrl = PROXY_URL;
 
 // Функция для смены порта прокси
 function rotateProxyPort() {
@@ -213,13 +214,8 @@ async function sendTelegramSticker(stickerId) {
 
 // ===== ПОИСК РОЛИ =====
 async function findRoleName(roleId) {
-    for (const [, guild] of client.guilds.cache) {
-        const role = guild.roles.cache.get(roleId);
-        if (role) {
-            return role.name;
-        }
-    }
-    return null;
+    // Эта функция будет использовать client, поэтому она должна вызываться только после создания client
+    return null; // Временно
 }
 
 // ===== ПАРСИНГ КОМПОНЕНТОВ =====
@@ -264,59 +260,6 @@ function checkTargetItems(items) {
     }
     
     return found;
-}
-
-// ===== ПАРСИНГ КАНАЛА =====
-async function parseSeedChannel() {
-    try {
-        const channel = await client.channels.fetch(STOCKS_CHANNEL_ID);
-        if (!channel) return null;
-        
-        const messages = await channel.messages.fetch({ limit: 1 });
-        const msg = messages.first();
-        
-        if (!msg || !msg.components || !msg.components.length) {
-            return null;
-        }
-        
-        const messageAge = Date.now() - msg.createdTimestamp;
-        const maxAge = 5 * 60 * 1000;
-        
-        if (messageAge > maxAge) {
-            return null;
-        }
-        
-        if (processedIds.includes(msg.id)) {
-            return null;
-        }
-        
-        const text = extractTextFromComponents(msg.components);
-        const lines = text.split('\n');
-        const items = [];
-        
-        for (const line of lines) {
-            const match = line.match(/<@&(\d+)>\s*\(x(\d+)\)/);
-            if (match) {
-                const roleId = match[1];
-                const count = parseInt(match[2]);
-                const name = await findRoleName(roleId);
-                
-                if (name) {
-                    items.push({ 
-                        name: name, 
-                        count: count,
-                        roleId: roleId
-                    });
-                }
-            }
-        }
-        
-        return items.length ? items : null;
-        
-    } catch (error) {
-        console.error('❌ Ошибка парсинга:', error.message);
-        return null;
-    }
 }
 
 // ===== ОБРАБОТКА КОМАНД =====
@@ -375,39 +318,6 @@ async function checkTelegramCommands() {
     }
 }
 
-// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА =====
-async function checkAll() {
-    await checkTelegramCommands();
-    
-    const items = await parseSeedChannel();
-    
-    if (items && items.length > 0 && botEnabled) {
-        const found = checkTargetItems(items);
-        
-        if (found.length > 0) {
-            stats.targetFound += found.length;
-            console.log('⚠️ Polling: найдены целевые предметы в пропущенном сообщении');
-            
-            const time = new Date().toLocaleTimeString();
-            let messageText = `⚠️ <b>Внимание! Найдены предметы (пропущенный сток) в ${time}</b>\n\n`;
-            
-            for (const item of items) {
-                const isTarget = found.some(f => f.display_name === item.name);
-                const emoji = isTarget ? '✅ ' : '';
-                messageText += `${emoji}• ${item.name} — ${item.count}\n`;
-            }
-            
-            for (const item of found) {
-                if (item.sticker_id) {
-                    await sendTelegramSticker(item.sticker_id);
-                }
-            }
-            
-            await sendTelegram(messageText);
-        }
-    }
-}
-
 // ===== ДИАГНОСТИКА =====
 setInterval(async () => {
     console.log('\n🔍 Запуск диагностики...');
@@ -433,16 +343,13 @@ setInterval(async () => {
                     proxyAgent = newProxy.startsWith('socks') 
                         ? new SocksProxyAgent(newProxy)
                         : new HttpsProxyAgent(newProxy);
+                    currentProxyUrl = newProxy;
+                    console.log('🔄 Прокси заменен на новый порт');
                 }
             }
         }
         
-        if (client && client.ws) {
-            const shard = client.ws.shards?.first();
-            if (shard) {
-                console.log(`📊 WebSocket пинг: ${shard.ping || 'N/A'}ms`);
-            }
-        }
+        console.log('📊 Ожидание подключения к Discord...');
         
     } catch (error) {
         console.error('❌ Ошибка диагностики:', error.message);
@@ -481,6 +388,7 @@ async function startBot() {
     
     // Сначала инициализируем прокси
     const workingProxy = await getWorkingProxy();
+    currentProxyUrl = workingProxy;
     
     // Создаем клиента ТОЛЬКО после настройки прокси
     const clientOptions = {};
@@ -496,6 +404,17 @@ async function startBot() {
     
     // СОЗДАЕМ КЛИЕНТА ЗДЕСЬ
     const client = new Client(clientOptions);
+    
+    // Обновляем функцию поиска роли, чтобы использовать client
+    async function findRoleName(roleId) {
+        for (const [, guild] of client.guilds.cache) {
+            const role = guild.roles.cache.get(roleId);
+            if (role) {
+                return role.name;
+            }
+        }
+        return null;
+    }
     
     // ===== ВСЕ ОБРАБОТЧИКИ ПЕРЕНОСИМ СЮДА =====
     
@@ -527,6 +446,7 @@ async function startBot() {
                     
                     if (name) {
                         items.push({ name, count, roleId });
+                        console.log(`🎯 Найден предмет: ${name} x${count}`);
                     }
                 }
             }
@@ -609,16 +529,103 @@ async function startBot() {
             console.log('🔄 Попытка смены прокси...');
             
             const newProxy = rotateProxyPort();
-            if (newProxy && newProxy !== PROXY_URL) {
+            if (newProxy && newProxy !== currentProxyUrl) {
                 proxyAgent = newProxy.startsWith('socks') 
                     ? new SocksProxyAgent(newProxy)
                     : new HttpsProxyAgent(newProxy);
+                currentProxyUrl = newProxy;
                 
                 console.log('✅ Прокси заменен');
                 await sendTelegram('🔄 Прокси заменен из-за ошибки');
             }
         }
     });
+    
+    // ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА =====
+    async function checkAll() {
+        await checkTelegramCommands();
+        
+        const items = await parseSeedChannel();
+        
+        if (items && items.length > 0 && botEnabled) {
+            const found = checkTargetItems(items);
+            
+            if (found.length > 0) {
+                stats.targetFound += found.length;
+                console.log('⚠️ Polling: найдены целевые предметы в пропущенном сообщении');
+                
+                const time = new Date().toLocaleTimeString();
+                let messageText = `⚠️ <b>Внимание! Найдены предметы (пропущенный сток) в ${time}</b>\n\n`;
+                
+                for (const item of items) {
+                    const isTarget = found.some(f => f.display_name === item.name);
+                    const emoji = isTarget ? '✅ ' : '';
+                    messageText += `${emoji}• ${item.name} — ${item.count}\n`;
+                }
+                
+                for (const item of found) {
+                    if (item.sticker_id) {
+                        await sendTelegramSticker(item.sticker_id);
+                    }
+                }
+                
+                await sendTelegram(messageText);
+            }
+        }
+    }
+    
+    // ===== ПАРСИНГ КАНАЛА =====
+    async function parseSeedChannel() {
+        try {
+            const channel = await client.channels.fetch(STOCKS_CHANNEL_ID);
+            if (!channel) return null;
+            
+            const messages = await channel.messages.fetch({ limit: 1 });
+            const msg = messages.first();
+            
+            if (!msg || !msg.components || !msg.components.length) {
+                return null;
+            }
+            
+            const messageAge = Date.now() - msg.createdTimestamp;
+            const maxAge = 5 * 60 * 1000;
+            
+            if (messageAge > maxAge) {
+                return null;
+            }
+            
+            if (processedIds.includes(msg.id)) {
+                return null;
+            }
+            
+            const text = extractTextFromComponents(msg.components);
+            const lines = text.split('\n');
+            const items = [];
+            
+            for (const line of lines) {
+                const match = line.match(/<@&(\d+)>\s*\(x(\d+)\)/);
+                if (match) {
+                    const roleId = match[1];
+                    const count = parseInt(match[2]);
+                    const name = await findRoleName(roleId);
+                    
+                    if (name) {
+                        items.push({ 
+                            name: name, 
+                            count: count,
+                            roleId: roleId
+                        });
+                    }
+                }
+            }
+            
+            return items.length ? items : null;
+            
+        } catch (error) {
+            console.error('❌ Ошибка парсинга:', error.message);
+            return null;
+        }
+    }
     
     // ===== ОБРАБОТКА ОТКЛЮЧЕНИЯ =====
     client.on('disconnect', async (event) => {
