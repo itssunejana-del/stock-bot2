@@ -1,22 +1,22 @@
 {
   "name": "stockbot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Garden Horizons Stock Bot",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.5",
+    "discord.js-selfbot-v13": "^3.7.1",
+    "dotenv": "^17.3.1",
+    "express": "^4.18.2",
+    "fs": "^0.0.1-security",
+    "socks-proxy-agent": "^8.0.2",
+    "https-proxy-agent": "^7.0.2"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "axios": "^1.13.5",
-    "debug": "^4.4.3",
-    "discord.js-selfbot-v13": "^3.7.1",
-    "dotenv": "^17.3.1",
-    "undici": "^7.22.0",
-    "express": "^4.18.2",
-    "werift": "^0.22.9"
-  }
+  "type": "commonjs"
 }
