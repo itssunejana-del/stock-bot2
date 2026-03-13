@@ -26,13 +26,25 @@ app.listen(port, () => {
     console.log(`✅ Web server running on port ${port}`);
 });
 
-// ===== СОЗДАНИЕ КЛИЕНТА С ДИАГНОСТИКОЙ =====
+// ===== СОЗДАНИЕ КЛИЕНТА С ПРАВИЛЬНЫМИ НАСТРОЙКАМИ =====
 const client = new Client({
-    // Эти параметры могут помочь с WebSocket
+    // Эти параметры критически важны для WebSocket
     ws: {
-        // Увеличиваем таймауты
-        timeout: 60000
-    }
+        // Увеличиваем таймауты для медленного соединения
+        timeout: 60000,
+        large_threshold: 250,
+        compress: true,
+        properties: {
+            $os: 'linux',
+            $browser: 'chrome',
+            $device: 'pc'
+        },
+        version: 9 // Используем API v9
+    },
+    // Отключаем voice, так как он не нужен и может мешать
+    disableEveryone: true,
+    restTimeOffset: 500,
+    restRequestTimeout: 30000
 });
 
 // ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
@@ -341,12 +353,10 @@ client.on('warn', (info) => {
 
 client.on('error', (error) => {
     console.error('❌ [ERROR]', error.message);
-    // Детальная информация об ошибке
     if (error.code) console.error('   Код ошибки:', error.code);
     if (error.path) console.error('   Path:', error.path);
     if (error.method) console.error('   Method:', error.method);
     
-    // Проверка на Cloudflare блокировку [citation:6]
     if (error.message && error.message.includes('Cloudflare')) {
         console.error('   ⚠️ Похоже на блокировку Cloudflare. IP Render в бане?');
         sendTelegram('⚠️ <b>Обнаружена блокировка Cloudflare</b>\nВозможно, IP Render временно забанен');
@@ -511,15 +521,6 @@ client.on('disconnect', async () => {
     await new Promise(resolve => setTimeout(resolve, reconnectDelay));
 });
 
-client.on('error', async (error) => {
-    console.error('❌ Ошибка WebSocket:', error.message);
-    
-    if (consecutiveErrors % 5 === 0) {
-        await sendTelegram(`❌ <b>Ошибка WebSocket:</b> ${error.message}`);
-    }
-    consecutiveErrors++;
-});
-
 // ===== ПРОВЕРКА ЗДОРОВЬЯ СОЕДИНЕНИЯ =====
 setInterval(async () => {
     try {
@@ -580,7 +581,15 @@ client.on('ready', async () => {
     console.log('👀 Бот запущен и слушает WebSocket');
 });
 
-// Сам запуск логина
+// Сам запуск логина с обработкой ошибок
+console.log('🔄 Попытка входа в Discord...');
 client.login(process.env.USER_TOKEN).catch(error => {
     console.error('❌ Ошибка при вызове login():', error.message);
+    if (error.message.includes('ECONNRESET')) {
+        console.error('   → Соединение сброшено. Возможно, Cloudflare блокирует IP.');
+    } else if (error.message.includes('ETIMEDOUT')) {
+        console.error('   → Таймаут соединения. Discord не отвечает.');
+    } else if (error.message.includes('token')) {
+        console.error('   → Проблема с токеном.');
+    }
 });
