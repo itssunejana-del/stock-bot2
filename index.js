@@ -3,21 +3,10 @@ const { Client } = require('discord.js-selfbot-v13');
 const axios = require('axios');
 const fs = require('fs').promises;
 const express = require('express');
-const { HttpsProxyAgent } = require('https-proxy-agent');
 const http = require('http');
 const https = require('https');
 
-// ===== ПРОКСИ ОТ PROXYCOVE =====
-const PROXY_CONFIG = {
-  host: 'go.proxycove.com',
-  port: 10000,
-  auth: '8c4caf4549d875ea6928:01681f09f17cb891'
-};
-
-const proxyUrl = `http://${PROXY_CONFIG.auth}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
-const proxyAgent = new HttpsProxyAgent(proxyUrl);
-
-// ===== HTTP-агенты с поддержкой прокси =====
+// ===== HTTP-агенты =====
 const httpsAgent = new https.Agent({ keepAlive: true });
 const httpAgent = new http.Agent({ keepAlive: true });
 
@@ -331,22 +320,6 @@ async function checkTelegramCommands() {
     }
 }
 
-// ===== ПРОВЕРКА IP ЧЕРЕЗ ПРОКСИ =====
-async function checkProxyIP() {
-    try {
-        const response = await axios.get('https://api.ipify.org?format=json', { 
-            httpsAgent: proxyAgent,
-            timeout: 10000 
-        });
-        console.log('🌐 Внешний IP через прокси:', response.data.ip);
-        await sendTelegram(`🌐 <b>Бот работает через прокси</b>\nIP: ${response.data.ip}`);
-        return response.data.ip;
-    } catch (error) {
-        console.error('❌ Не удалось проверить IP через прокси:', error.message);
-        return null;
-    }
-}
-
 // ===== МГНОВЕННАЯ ОБРАБОТКА ЧЕРЕЗ WEBSOCKET =====
 client.on('messageCreate', async (message) => {
     try {
@@ -561,15 +534,12 @@ client.on('ready', async () => {
     console.log(`✅ Залогинен как ${client.user.tag}`);
     await loadState();
     
-    // Проверяем IP через прокси
-    const proxyIP = await checkProxyIP();
-    
     const startupDelay = Math.random() * 5000 + 2000;
     console.log(`⏳ Ожидание ${Math.round(startupDelay / 1000)} секунд перед началом...`);
     await new Promise(resolve => setTimeout(resolve, startupDelay));
     
     const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
-    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n📝 Команды: /enable, /disable, /status${proxyIP ? `\n🌐 Прокси: ${proxyIP}` : ''}`);
+    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n📝 Команды: /enable, /disable, /status`);
     
     startIntelligentLoop();
     
