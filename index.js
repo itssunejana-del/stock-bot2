@@ -3,7 +3,7 @@ const { Client } = require('discord.js-selfbot-v13');
 const axios = require('axios');
 const fs = require('fs').promises;
 const express = require('express');
-const HttpsProxyAgent = require('https-proxy-agent');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const http = require('http');
 const https = require('https');
 
@@ -89,7 +89,7 @@ async function loadState() {
     try {
         const data = await fs.readFile('state.json', 'utf8');
         const loaded = JSON.parse(data);
-        processedIds = Array.isArray(loaded.processedIds) ? loaded.processIds : [];
+        processedIds = Array.isArray(loaded.processedIds) ? loaded.processedIds : [];
         console.log(`📂 Загружено состояние: ${processedIds.length} обработанных сообщений`);
     } catch (error) {
         console.log('🆕 Новое состояние');
