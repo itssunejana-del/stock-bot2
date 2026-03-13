@@ -26,8 +26,14 @@ app.listen(port, () => {
     console.log(`✅ Web server running on port ${port}`);
 });
 
-// ===== СОЗДАНИЕ КЛИЕНТА =====
-const client = new Client();
+// ===== СОЗДАНИЕ КЛИЕНТА С ДИАГНОСТИКОЙ =====
+const client = new Client({
+    // Эти параметры могут помочь с WebSocket
+    ws: {
+        // Увеличиваем таймауты
+        timeout: 60000
+    }
+});
 
 // ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
 const TARGET_ITEMS = {
@@ -320,6 +326,33 @@ async function checkTelegramCommands() {
     }
 }
 
+// ========== ДИАГНОСТИКА ПОДКЛЮЧЕНИЯ ==========
+client.on('ready', () => {
+    console.log('✅ СОБЫТИЕ READY СРАБОТАЛО! Бот подключился!');
+});
+
+client.on('debug', (info) => {
+    console.log('🔍 [DEBUG]', info);
+});
+
+client.on('warn', (info) => {
+    console.log('⚠️ [WARN]', info);
+});
+
+client.on('error', (error) => {
+    console.error('❌ [ERROR]', error.message);
+    // Детальная информация об ошибке
+    if (error.code) console.error('   Код ошибки:', error.code);
+    if (error.path) console.error('   Path:', error.path);
+    if (error.method) console.error('   Method:', error.method);
+    
+    // Проверка на Cloudflare блокировку [citation:6]
+    if (error.message && error.message.includes('Cloudflare')) {
+        console.error('   ⚠️ Похоже на блокировку Cloudflare. IP Render в бане?');
+        sendTelegram('⚠️ <b>Обнаружена блокировка Cloudflare</b>\nВозможно, IP Render временно забанен');
+    }
+});
+
 // ===== МГНОВЕННАЯ ОБРАБОТКА ЧЕРЕЗ WEBSOCKET =====
 client.on('messageCreate', async (message) => {
     try {
@@ -547,4 +580,7 @@ client.on('ready', async () => {
     console.log('👀 Бот запущен и слушает WebSocket');
 });
 
-client.login(process.env.USER_TOKEN);
+// Сам запуск логина
+client.login(process.env.USER_TOKEN).catch(error => {
+    console.error('❌ Ошибка при вызове login():', error.message);
+});
