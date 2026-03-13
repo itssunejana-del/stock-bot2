@@ -1,13 +1,24 @@
 require('dotenv').config();
-const { Client } = require('discord.js-selfbot-v13');
+const { Client } = require('discord.js-selfbot-v13-proxy');
 const axios = require('axios');
 const fs = require('fs').promises;
 const express = require('express');
-const https = require('https');
+const HttpsProxyAgent = require('https-proxy-agent');
 const http = require('http');
+const https = require('https');
 
-// --- Настройка HTTP-агента с keepAlive ---
-const agent = new https.Agent({ keepAlive: true });
+// ===== ПРОКСИ ОТ PROXYCOVE =====
+const PROXY_CONFIG = {
+  host: 'go.proxycove.com',
+  port: 10000,
+  auth: '8c4caf4549d875ea6928:01681f09f17cb891'
+};
+
+const proxyUrl = `http://${PROXY_CONFIG.auth}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
+const proxyAgent = new HttpsProxyAgent(proxyUrl);
+
+// ===== HTTP-агенты с поддержкой прокси =====
+const httpsAgent = new https.Agent({ keepAlive: true });
 const httpAgent = new http.Agent({ keepAlive: true });
 
 // ===== Express сервер для Render =====
@@ -25,9 +36,14 @@ app.get('/health', (req, res) => {
 app.listen(port, () => {
     console.log(`✅ Web server running on port ${port}`);
 });
-// ======================================
 
-const client = new Client();
+// ===== СОЗДАНИЕ КЛИЕНТА С ПРОКСИ =====
+const client = new Client({
+  http: {
+    agent: proxyAgent,
+    proxy: proxyUrl
+  }
+});
 
 // ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
 const TARGET_ITEMS = {
@@ -95,7 +111,7 @@ async function saveState() {
     }
 }
 
-// ===== ФУНКЦИЯ ОТПРАВКИ В TELEGRAM С ОБРАБОТКОЙ RATE LIMIT =====
+// ===== ФУНКЦИЯ ОТПРАВКИ В TELEGRAM =====
 async function sendTelegram(text, parseMode = 'HTML') {
     if (!botEnabled) {
         console.log('🔇 Бот отключен, сообщение не отправлено');
@@ -114,9 +130,9 @@ async function sendTelegram(text, parseMode = 'HTML') {
                 parse_mode: parseMode
             };
             
-            const response = await axios.post(url, data, {
+            await axios.post(url, data, {
                 httpAgent: httpAgent,
-                httpsAgent: agent,
+                httpsAgent: httpsAgent,
                 timeout: 10000
             });
             
@@ -154,7 +170,7 @@ async function sendTelegramSticker(stickerId) {
         };
         await axios.post(url, data, {
             httpAgent: httpAgent,
-            httpsAgent: agent,
+            httpsAgent: httpsAgent,
             timeout: 10000
         });
         console.log('✅ Стикер отправлен');
@@ -233,7 +249,6 @@ async function parseSeedChannel() {
             return null;
         }
         
-        // Проверка на свежесть (5 минут)
         const messageAge = Date.now() - msg.createdTimestamp;
         const maxAge = 5 * 60 * 1000;
         
@@ -241,7 +256,6 @@ async function parseSeedChannel() {
             return null;
         }
         
-        // Защита от дублей
         if (processedIds.includes(msg.id)) {
             return null;
         }
@@ -281,7 +295,7 @@ async function checkTelegramCommands() {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=-1&timeout=0`;
         const response = await axios.get(url, {
             httpAgent: httpAgent,
-            httpsAgent: agent
+            httpsAgent: httpsAgent
         });
         const updates = response.data.result;
         
@@ -322,6 +336,22 @@ async function checkTelegramCommands() {
     }
 }
 
+// ===== ПРОВЕРКА IP ЧЕРЕЗ ПРОКСИ =====
+async function checkProxyIP() {
+    try {
+        const response = await axios.get('https://api.ipify.org?format=json', { 
+            httpsAgent: proxyAgent,
+            timeout: 10000 
+        });
+        console.log('🌐 Внешний IP через прокси:', response.data.ip);
+        await sendTelegram(`🌐 <b>Бот работает через прокси</b>\nIP: ${response.data.ip}`);
+        return response.data.ip;
+    } catch (error) {
+        console.error('❌ Не удалось проверить IP через прокси:', error.message);
+        return null;
+    }
+}
+
 // ===== МГНОВЕННАЯ ОБРАБОТКА ЧЕРЕЗ WEBSOCKET =====
 client.on('messageCreate', async (message) => {
     try {
@@ -335,7 +365,7 @@ client.on('messageCreate', async (message) => {
         
         console.log(`⚡ WebSocket: получено новое сообщение ${message.id}`);
         lastMessageTime = Date.now();
-        consecutiveErrors = 0; // Сброс счетчика ошибок при успехе
+        consecutiveErrors = 0;
         
         const text = extractTextFromComponents(message.components);
         if (!text) return;
@@ -403,19 +433,13 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА С ИНТЕЛЛЕКТУАЛЬНЫМ ИНТЕРВАЛОМ =====
+// ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА =====
 async function checkAll() {
     try {
-        // Проверяем команды из Telegram
         await checkTelegramCommands();
         
-        // Получаем последнее сообщение
         const items = await parseSeedChannel();
         
-        // Отправляем сообщение ТОЛЬКО если:
-        // 1. Есть предметы
-        // 2. Бот включен
-        // 3. Есть целевые предметы
         if (items && items.length > 0 && botEnabled) {
             const found = checkTargetItems(items);
             
@@ -431,7 +455,6 @@ async function checkAll() {
                     messageText += `${emoji}• ${item.name} — ${item.count}\n`;
                 }
                 
-                // Отправляем стикеры для найденных
                 for (const item of found) {
                     if (item.sticker_id) {
                         await sendTelegramSticker(item.sticker_id);
@@ -442,7 +465,7 @@ async function checkAll() {
             }
         }
         
-        consecutiveErrors = 0; // Сброс счетчика ошибок при успехе
+        consecutiveErrors = 0;
         
     } catch (error) {
         console.error('❌ Ошибка в checkAll:', error.message);
@@ -450,30 +473,26 @@ async function checkAll() {
     }
 }
 
-// ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ИНТЕЛЛЕКТУАЛЬНОЙ ЗАДЕРЖКИ =====
+// ===== ИНТЕЛЛЕКТУАЛЬНАЯ ЗАДЕРЖКА =====
 function getIntelligentDelay() {
-    const baseDelay = 25000; // 25 секунд
-    const randomFactor = Math.random() * 10000; // +0-10 секунд
+    const baseDelay = 25000;
+    const randomFactor = Math.random() * 10000;
     
-    // Если были ошибки, увеличиваем задержку
     if (consecutiveErrors > 0) {
-        const errorPenalty = Math.min(consecutiveErrors * 5000, 30000); // +5 сек за ошибку, макс 30 сек
+        const errorPenalty = Math.min(consecutiveErrors * 5000, 30000);
         return baseDelay + randomFactor + errorPenalty;
     }
     
-    // Имитация "режима отдыха" - 20% вероятности на длинную паузу
     if (Math.random() < 0.2) {
-        return baseDelay + randomFactor + 15000; // +15 секунд
+        return baseDelay + randomFactor + 15000;
     }
     
     return baseDelay + randomFactor;
 }
 
-// ===== ФУНКЦИЯ ЗАПУСКА ЦИКЛА С ИНТЕЛЛЕКТУАЛЬНЫМИ ЗАДЕРЖКАМИ =====
 async function startIntelligentLoop() {
     while (true) {
         await checkAll();
-        
         const delay = getIntelligentDelay();
         console.log(`⏳ Следующая проверка через ${Math.round(delay / 1000)} секунд...`);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -486,17 +505,14 @@ client.on('disconnect', async () => {
     await sendTelegram('⚠️ <b>Потеря соединения с Discord</b>\nПытаюсь переподключиться...');
     reconnectAttempts++;
     
-    // Экспоненциальная задержка при переподключении
     const reconnectDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
     console.log(`⏳ Переподключение через ${reconnectDelay / 1000} секунд...`);
     await new Promise(resolve => setTimeout(resolve, reconnectDelay));
 });
 
-// ===== ОБРАБОТКА ОШИБОК СОЕДИНЕНИЯ =====
 client.on('error', async (error) => {
     console.error('❌ Ошибка WebSocket:', error.message);
     
-    // Отправляем уведомление только если это не частая ошибка
     if (consecutiveErrors % 5 === 0) {
         await sendTelegram(`❌ <b>Ошибка WebSocket:</b> ${error.message}`);
     }
@@ -513,55 +529,53 @@ setInterval(async () => {
         
         console.log(`📡 WebSocket пинг: ${client.ws.ping}ms`);
         
-        // Если пинг слишком большой - возможно проблема
         if (client.ws.ping > 5000 && botEnabled) {
             console.log(`⚠️ Высокий пинг: ${client.ws.ping}ms`);
             await sendTelegram(`⚠️ <b>Высокий пинг WebSocket</b>\nПинг: ${client.ws.ping}ms`);
         }
         
-        // Проверка на "зависание" (нет сообщений более 10 минут)
         const timeSinceLastMessage = Date.now() - lastMessageTime;
         if (timeSinceLastMessage > 10 * 60 * 1000 && botEnabled) {
             console.log(`⚠️ Нет сообщений ${Math.round(timeSinceLastMessage / 60000)} минут`);
             await sendTelegram(`⚠️ <b>Бот не получает сообщения</b>\nПоследнее сообщение было ${Math.round(timeSinceLastMessage / 60000)} минут назад`);
         }
         
-        // Сбрасываем счетчик попыток при успешном соединении
         reconnectAttempts = 0;
         
     } catch (error) {
         console.error('❌ Ошибка проверки пинга:', error.message);
     }
-}, 60000); // Проверка каждую минуту
+}, 60000);
 
-// ===== САМОПИНГ ДЛЯ RENDER (каждые 5 минут) =====
+// ===== САМОПИНГ ДЛЯ RENDER =====
 setInterval(async () => {
     try {
         const response = await axios.get(`https://stock-bot2.onrender.com/health`, {
             httpAgent: httpAgent,
-            httpsAgent: agent,
+            httpsAgent: httpsAgent,
             timeout: 5000
         });
         console.log(`🏓 Самопинг: ${response.status} - ${response.data.time}`);
     } catch (error) {
         console.error('❌ Ошибка самопинга:', error.message);
     }
-}, 300000); // Каждые 5 минут
+}, 300000);
 
 // ===== ЗАПУСК =====
 client.on('ready', async () => {
     console.log(`✅ Залогинен как ${client.user.tag}`);
     await loadState();
     
-    // Случайная задержка перед началом работы (имитация "человека")
-    const startupDelay = Math.random() * 5000 + 2000; // 2-7 секунд
+    // Проверяем IP через прокси
+    const proxyIP = await checkProxyIP();
+    
+    const startupDelay = Math.random() * 5000 + 2000;
     console.log(`⏳ Ожидание ${Math.round(startupDelay / 1000)} секунд перед началом...`);
     await new Promise(resolve => setTimeout(resolve, startupDelay));
     
     const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
-    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n📝 Команды: /enable, /disable, /status`);
+    await sendTelegram(`🤖 <b>Бот запущен в режиме WebSocket!</b>\n📊 Отслеживаю: ${targets}\n📝 Команды: /enable, /disable, /status${proxyIP ? `\n🌐 Прокси: ${proxyIP}` : ''}`);
     
-    // Запускаем интеллектуальный цикл вместо setInterval
     startIntelligentLoop();
     
     lastMessageTime = Date.now();
