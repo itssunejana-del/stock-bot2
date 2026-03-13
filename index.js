@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client } = require('discord.js-selfbot-v13-proxy');
+const { Client } = require('discord.js-selfbot-v13');
 const axios = require('axios');
 const fs = require('fs').promises;
 const express = require('express');
@@ -37,13 +37,8 @@ app.listen(port, () => {
     console.log(`✅ Web server running on port ${port}`);
 });
 
-// ===== СОЗДАНИЕ КЛИЕНТА С ПРОКСИ =====
-const client = new Client({
-  http: {
-    agent: proxyAgent,
-    proxy: proxyUrl
-  }
-});
+// ===== СОЗДАНИЕ КЛИЕНТА =====
+const client = new Client();
 
 // ===== ТВОИ ЦЕЛЕВЫЕ ПРЕДМЕТЫ =====
 const TARGET_ITEMS = {
@@ -94,7 +89,7 @@ async function loadState() {
     try {
         const data = await fs.readFile('state.json', 'utf8');
         const loaded = JSON.parse(data);
-        processedIds = Array.isArray(loaded.processedIds) ? loaded.processedIds : [];
+        processedIds = Array.isArray(loaded.processedIds) ? loaded.processIds : [];
         console.log(`📂 Загружено состояние: ${processedIds.length} обработанных сообщений`);
     } catch (error) {
         console.log('🆕 Новое состояние');
