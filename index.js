@@ -25,84 +25,99 @@ app.listen(port, () => {
 
 // ===== НАСТРОЙКА ПРОКСИ =====
 const PROXY_URL = process.env.PROXY_URL;
-const PROXY_PORTS = ['1080', '1081', '1082', '1083', '1084', '1085']; // Основные порты ProxyCove
+const PROXY_PORTS = ['1080', '1081', '1082', '1083', '1084', '1085', '1086', '1087', '1088', '1089', '1090'];
 let currentProxyIndex = 0;
 let proxyAgent = null;
-let proxyFailCount = 0;
 let currentProxyUrl = PROXY_URL;
+
+// Функция для получения IP через разные сервисы
+async function getPublicIp(agent = null) {
+    const services = [
+        'https://api.ipify.org?format=json',
+        'https://api.my-ip.io/ip.json',
+        'https://ipapi.co/json/',
+        'https://ipinfo.io/json'
+    ];
+    
+    for (const service of services) {
+        try {
+            const config = {
+                timeout: 10000
+            };
+            if (agent) {
+                config.httpAgent = agent;
+                config.httpsAgent = agent;
+            }
+            
+            const response = await axios.get(service, config);
+            if (response.data && (response.data.ip || response.data.ip_address)) {
+                return response.data.ip || response.data.ip_address;
+            }
+        } catch (e) {
+            continue;
+        }
+    }
+    return null;
+}
+
+// Функция для детальной проверки прокси
+async function testProxy(proxyUrl) {
+    if (!proxyUrl) return null;
+    
+    console.log('\n🔍 ДЕТАЛЬНАЯ ПРОВЕРКА ПРОКСИ');
+    console.log(`📡 Прокси URL: ${proxyUrl}`);
+    
+    try {
+        const agent = proxyUrl.startsWith('socks') 
+            ? new SocksProxyAgent(proxyUrl)
+            : new HttpsProxyAgent(proxyUrl);
+        
+        // 1. Проверяем IP через прокси
+        const proxyIp = await getPublicIp(agent);
+        console.log(`🌍 IP через прокси: ${proxyIp || 'не удалось определить'}`);
+        
+        // 2. Проверяем прямой IP Render
+        const renderIp = await getPublicIp();
+        console.log(`🏭 IP Render: ${renderIp || 'не удалось определить'}`);
+        
+        // 3. Сравниваем IP
+        if (proxyIp && renderIp) {
+            if (proxyIp === renderIp) {
+                console.log('❌ КРИТИЧЕСКАЯ ОШИБКА: IP совпадают! Прокси НЕ РАБОТАЕТ!');
+                return { success: false, proxyIp, renderIp, working: false };
+            } else {
+                console.log('✅ УСПЕХ: IP отличаются, прокси работает корректно');
+                return { success: true, proxyIp, renderIp, working: true, agent };
+            }
+        } else {
+            console.log('⚠️ Не удалось определить IP, но прокси может работать');
+            return { success: true, proxyIp, renderIp, working: true, agent };
+        }
+        
+    } catch (error) {
+        console.log(`❌ Ошибка подключения через прокси: ${error.message}`);
+        return { success: false, error: error.message, working: false };
+    }
+}
 
 // Функция для смены порта прокси
 function rotateProxyPort() {
     if (!PROXY_URL) return null;
     
     try {
-        // Разбираем URL прокси
         const match = PROXY_URL.match(/(.+):(\d+)$/);
         if (!match) return PROXY_URL;
         
         const baseUrl = match[1];
-        const currentPort = match[2];
-        
-        // Берем следующий порт из списка
         const newPort = PROXY_PORTS[++currentProxyIndex % PROXY_PORTS.length];
         const newProxyUrl = `${baseUrl}:${newPort}`;
         
-        console.log(`🔄 Смена прокси: порт ${currentPort} -> ${newPort}`);
+        console.log(`🔄 Смена прокси: порт ${match[2]} -> ${newPort}`);
         return newProxyUrl;
     } catch (error) {
         console.error('❌ Ошибка смены прокси:', error.message);
         return PROXY_URL;
     }
-}
-
-// Функция для тестирования прокси
-async function testProxy(proxyUrl) {
-    if (!proxyUrl) return true;
-    
-    try {
-        const agent = proxyUrl.startsWith('socks') 
-            ? new SocksProxyAgent(proxyUrl)
-            : new HttpsProxyAgent(proxyUrl);
-            
-        const response = await axios.get('https://api.ipify.org?format=json', {
-            httpAgent: agent,
-            httpsAgent: agent,
-            timeout: 10000
-        });
-        
-        console.log(`✅ Прокси работает, внешний IP: ${response.data.ip}`);
-        return true;
-    } catch (error) {
-        console.log(`❌ Прокси не работает: ${error.message}`);
-        return false;
-    }
-}
-
-// Функция для получения рабочего прокси
-async function getWorkingProxy() {
-    if (!PROXY_URL) return null;
-    
-    let currentUrl = PROXY_URL;
-    let attempts = 0;
-    const maxAttempts = PROXY_PORTS.length * 2;
-    
-    while (attempts < maxAttempts) {
-        console.log(`🔍 Проверка прокси (попытка ${attempts + 1}/${maxAttempts})...`);
-        
-        if (await testProxy(currentUrl)) {
-            console.log('✅ Найден рабочий прокси');
-            return currentUrl;
-        }
-        
-        currentUrl = rotateProxyPort();
-        attempts++;
-        
-        // Пауза между попытками
-        await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    
-    console.log('❌ Не удалось найти рабочий прокси');
-    return null;
 }
 
 // ===== ОСНОВНЫЕ НАСТРОЙКИ =====
@@ -212,56 +227,6 @@ async function sendTelegramSticker(stickerId) {
     }
 }
 
-// ===== ПОИСК РОЛИ =====
-async function findRoleName(roleId) {
-    // Эта функция будет использовать client, поэтому она должна вызываться только после создания client
-    return null; // Временно
-}
-
-// ===== ПАРСИНГ КОМПОНЕНТОВ =====
-function extractTextFromComponents(components) {
-    if (!components || components.length === 0) return '';
-    
-    let text = '';
-    
-    function extract(comp) {
-        if (comp.content) {
-            text += comp.content + '\n';
-        }
-        if (comp.components) {
-            comp.components.forEach(extract);
-        }
-    }
-    
-    components.forEach(extract);
-    return text;
-}
-
-// ===== ПРОВЕРКА ЦЕЛЕВЫХ ПРЕДМЕТОВ =====
-function checkTargetItems(items) {
-    const found = [];
-    
-    for (const item of items) {
-        const itemName = item.name.toLowerCase();
-        
-        for (const [key, target] of Object.entries(TARGET_ITEMS)) {
-            for (const keyword of target.keywords) {
-                if (itemName.includes(keyword.toLowerCase()) || 
-                    itemName.includes(target.display_name.toLowerCase())) {
-                    found.push({
-                        key: key,
-                        ...target,
-                        count: item.count
-                    });
-                    break;
-                }
-            }
-        }
-    }
-    
-    return found;
-}
-
 // ===== ОБРАБОТКА КОМАНД =====
 async function checkTelegramCommands() {
     try {
@@ -319,44 +284,62 @@ async function checkTelegramCommands() {
 }
 
 // ===== ДИАГНОСТИКА =====
-setInterval(async () => {
-    console.log('\n🔍 Запуск диагностики...');
+async function runDiagnostics(agent) {
+    console.log('\n🔍 ЗАПУСК ПОЛНОЙ ДИАГНОСТИКИ');
     
-    try {
-        const response = await axios.get('https://discord.com/api/v9/gateway', {
-            timeout: 10000,
-            validateStatus: false
-        });
+    // 1. Проверяем прокси
+    if (agent) {
+        console.log('\n📡 ТЕСТ 1: Проверка прокси');
+        const proxyIp = await getPublicIp(agent);
+        const renderIp = await getPublicIp();
+        console.log(`   IP через прокси: ${proxyIp || 'не определен'}`);
+        console.log(`   IP Render: ${renderIp || 'не определен'}`);
         
-        if (response.status === 200) {
-            console.log('🌐 Discord HTTP доступен');
-        } else if (response.status === 429) {
-            const retryAfter = response.headers['retry-after'] || 60;
-            console.log(`🌐 Discord HTTP: 429, retry after ${retryAfter}s`);
-            await sendTelegram(`⚠️ Discord rate limit, жду ${retryAfter}с`);
-            
-            // Автоматическая смена прокси при 429
-            if (PROXY_URL) {
-                stats.proxySwitches++;
-                const newProxy = rotateProxyPort();
-                if (newProxy) {
-                    proxyAgent = newProxy.startsWith('socks') 
-                        ? new SocksProxyAgent(newProxy)
-                        : new HttpsProxyAgent(newProxy);
-                    currentProxyUrl = newProxy;
-                    console.log('🔄 Прокси заменен на новый порт');
-                }
+        if (proxyIp && renderIp) {
+            if (proxyIp === renderIp) {
+                console.log('   ❌ Прокси НЕ РАБОТАЕТ - IP совпадают!');
+                await sendTelegram(`🚨 КРИТИЧНО: Прокси не работает! IP совпадает с Render: ${renderIp}`);
+            } else {
+                console.log('   ✅ Прокси работает корректно');
             }
         }
-        
-        console.log('📊 Ожидание подключения к Discord...');
-        
-    } catch (error) {
-        console.error('❌ Ошибка диагностики:', error.message);
     }
     
-    console.log('🔍 Диагностика завершена\n');
-}, 60000);
+    // 2. Проверяем Discord API
+    console.log('\n📡 ТЕСТ 2: Проверка Discord API');
+    try {
+        const discordResponse = await axios.get('https://discord.com/api/v9/gateway', {
+            timeout: 10000,
+            validateStatus: false,
+            httpAgent: agent,
+            httpsAgent: agent
+        });
+        
+        if (discordResponse.status === 200) {
+            console.log('   ✅ Discord API доступен');
+        } else if (discordResponse.status === 429) {
+            const retryAfter = discordResponse.headers['retry-after'] || 60;
+            console.log(`   ⚠️ Discord API: 429, retry after ${retryAfter}s`);
+            await sendTelegram(`⚠️ Discord rate limit, жду ${retryAfter}с`);
+        } else {
+            console.log(`   ⚠️ Discord API ответил кодом: ${discordResponse.status}`);
+        }
+    } catch (error) {
+        console.log(`   ❌ Ошибка доступа к Discord API: ${error.message}`);
+    }
+    
+    // 3. Проверяем, не утекает ли DNS
+    console.log('\n📡 ТЕСТ 3: Проверка DNS');
+    try {
+        const dns = require('dns').promises;
+        const addresses = await dns.lookup('discord.com');
+        console.log(`   DNS discord.com: ${addresses.address}`);
+    } catch (error) {
+        console.log(`   ❌ Ошибка DNS: ${error.message}`);
+    }
+    
+    console.log('\n🔍 ДИАГНОСТИКА ЗАВЕРШЕНА\n');
+}
 
 // ===== САМОПИНГ =====
 setInterval(async () => {
@@ -384,28 +367,65 @@ setInterval(() => {
 
 // ===== ЗАПУСК =====
 async function startBot() {
-    console.log('🚀 Запуск бота...');
+    console.log('🚀 ЗАПУСК БОТА');
+    console.log('=' .repeat(50));
     
-    // Сначала инициализируем прокси
-    const workingProxy = await getWorkingProxy();
-    currentProxyUrl = workingProxy;
-    
-    // Создаем клиента ТОЛЬКО после настройки прокси
-    const clientOptions = {};
-    if (workingProxy) {
-        if (workingProxy.startsWith('socks')) {
-            proxyAgent = new SocksProxyAgent(workingProxy);
-        } else {
-            proxyAgent = new HttpsProxyAgent(workingProxy);
-        }
-        clientOptions.http = { agent: proxyAgent };
-        console.log('🔌 Прокси будет использоваться для подключения');
+    // Проверяем наличие прокси
+    if (!PROXY_URL) {
+        console.log('⚠️ Прокси не настроен, буду использовать прямой IP Render');
+    } else {
+        console.log(`📡 Прокси URL: ${PROXY_URL}`);
     }
     
-    // СОЗДАЕМ КЛИЕНТА ЗДЕСЬ
+    // Тестируем все порты прокси
+    console.log('\n🔍 ТЕСТИРОВАНИЕ ВСЕХ ДОСТУПНЫХ ПОРТОВ');
+    console.log('=' .repeat(50));
+    
+    let workingProxy = null;
+    let workingAgent = null;
+    
+    for (let i = 0; i < PROXY_PORTS.length * 2; i++) {
+        const testUrl = i === 0 ? PROXY_URL : rotateProxyPort();
+        console.log(`\n📡 Тест порта ${i+1}/${PROXY_PORTS.length*2}`);
+        
+        const result = await testProxy(testUrl);
+        
+        if (result && result.working) {
+            workingProxy = testUrl;
+            workingAgent = result.agent;
+            currentProxyUrl = workingProxy;
+            proxyAgent = workingAgent;
+            console.log('\n✅ НАЙДЕН РАБОЧИЙ ПРОКСИ!');
+            break;
+        }
+    }
+    
+    if (!workingProxy) {
+        console.log('\n❌ НЕ НАЙДЕНО РАБОЧИХ ПРОКСИ');
+        console.log('Возможные причины:');
+        console.log('1. Все IP забанены Discord');
+        console.log('2. Прокси не работает');
+        console.log('3. Проблемы с сетью');
+        
+        await sendTelegram('🚨 Не найден рабочий прокси для Discord');
+    }
+    
+    // Запускаем диагностику
+    await runDiagnostics(workingAgent);
+    
+    // Создаем клиента
+    console.log('\n🔌 СОЗДАНИЕ КЛИЕНТА DISCORD');
+    const clientOptions = {};
+    if (workingAgent) {
+        clientOptions.http = { agent: workingAgent };
+        console.log('✅ Прокси будет использоваться для подключения');
+    } else {
+        console.log('⚠️ Подключение без прокси (прямой IP Render)');
+    }
+    
     const client = new Client(clientOptions);
     
-    // Обновляем функцию поиска роли, чтобы использовать client
+    // Функция поиска роли
     async function findRoleName(roleId) {
         for (const [, guild] of client.guilds.cache) {
             const role = guild.roles.cache.get(roleId);
@@ -416,324 +436,93 @@ async function startBot() {
         return null;
     }
     
-    // ===== ВСЕ ОБРАБОТЧИКИ ПЕРЕНОСИМ СЮДА =====
-    
+    // ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
     client.on('messageCreate', async (message) => {
         try {
             if (message.channel.id !== STOCKS_CHANNEL_ID) return;
             if (message.author.username.toLowerCase() !== 'dawnbot') return;
             
             if (processedIds.includes(message.id)) {
-                console.log(`⏭️ WebSocket: сообщение ${message.id} уже обработано`);
+                console.log(`⏭️ Сообщение ${message.id} уже обработано`);
                 return;
             }
             
-            console.log(`⚡ WebSocket: получено новое сообщение ${message.id}`);
+            console.log(`⚡ Новое сообщение ID: ${message.id}`);
             stats.totalMessages++;
             
-            const text = extractTextFromComponents(message.components);
-            if (!text) return;
-            
-            const lines = text.split('\n');
-            const items = [];
-            
-            for (const line of lines) {
-                const match = line.match(/<@&(\d+)>\s*\(x(\d+)\)/);
-                if (match) {
-                    const roleId = match[1];
-                    const count = parseInt(match[2]);
-                    const name = await findRoleName(roleId);
-                    
-                    if (name) {
-                        items.push({ name, count, roleId });
-                        console.log(`🎯 Найден предмет: ${name} x${count}`);
-                    }
-                }
-            }
-            
-            if (items.length === 0) return;
-            
-            const found = checkTargetItems(items);
-            
-            processedIds.push(message.id);
-            if (processedIds.length > 100) processedIds.shift();
-            await saveState();
-            
-            if (botEnabled) {
-                const time = new Date().toLocaleTimeString();
-                
-                if (found.length > 0) {
-                    stats.targetFound += found.length;
-                    console.log(`🎯 WebSocket: НАЙДЕНЫ ЦЕЛЕВЫЕ ПРЕДМЕТЫ: ${found.map(f => f.display_name).join(', ')}`);
-                    
-                    for (const item of found) {
-                        if (item.sticker_id) {
-                            await sendTelegramSticker(item.sticker_id);
-                        }
-                    }
-                    
-                    let messageText = `⚡ <b>Мгновенно! Найдены предметы в ${time}</b>\n\n`;
-                    for (const item of items) {
-                        const isTarget = found.some(f => f.display_name === item.name);
-                        const emoji = isTarget ? '✅ ' : '';
-                        messageText += `${emoji}• ${item.name} — ${item.count}\n`;
-                    }
-                    await sendTelegram(messageText);
-                } else {
-                    console.log(`📊 WebSocket: целевые предметы не найдены`);
-                    
-                    let messageText = `📊 <b>Сток в ${time}</b>\n`;
-                    messageText += `🎯 Целевые предметы: не найдены\n\n`;
-                    for (const item of items) {
-                        messageText += `• ${item.name} — ${item.count}\n`;
-                    }
-                    await sendTelegram(messageText);
-                }
-            }
+            // Здесь будет обработка сообщения
+            console.log(`📄 Сообщение получено, но обработка отключена до решения проблемы с прокси`);
             
         } catch (error) {
-            console.error('❌ Ошибка в WebSocket обработчике:', error.message);
-            stats.errors++;
-            lastError = `WebSocket: ${error.message}`;
+            console.error('❌ Ошибка:', error.message);
         }
     });
     
+    // ===== ОБРАБОТЧИКИ СОСТОЯНИЯ =====
     client.on('ready', async () => {
-        console.log(`✅ Залогинен как ${client.user.tag}`);
+        console.log(`\n✅ Залогинен как ${client.user.tag}`);
         await loadState();
         
-        const targets = Object.values(TARGET_ITEMS).map(t => t.emoji).join(' ');
-        const proxyStatus = PROXY_URL ? '✅ Да' : '❌ Нет';
+        // Проверяем IP после подключения
+        console.log('\n🔍 ПРОВЕРКА IP ПОСЛЕ ПОДКЛЮЧЕНИЯ');
+        const currentIp = await getPublicIp();
+        console.log(`🏭 Текущий IP (видимый извне): ${currentIp || 'не определен'}`);
         
         await sendTelegram(
-            `🤖 <b>Бот запущен в режиме WebSocket!</b>\n` +
-            `📊 Отслеживаю: ${targets}\n` +
-            `🌐 Прокси: ${proxyStatus}\n` +
-            `🔄 Автосмена прокси: ${PROXY_PORTS.length} портов\n` +
-            `📝 Команды: /enable, /disable, /status`
+            `🤖 <b>Бот запущен</b>\n` +
+            `🌐 IP: ${currentIp || 'не определен'}`
         );
         
-        setInterval(checkAll, 30 * 1000);
-        console.log('👀 Бот запущен и слушает WebSocket');
-        errorCount = 0;
-        lastError = null;
+        console.log('\n👀 Бот слушает WebSocket');
     });
     
     client.on('error', async (error) => {
         console.error('❌ Ошибка WebSocket:', error);
         stats.errors++;
-        lastError = error.message;
         
         if (error.message.includes('429') || error.message.includes('ECONNREFUSED')) {
-            stats.proxySwitches++;
             console.log('🔄 Попытка смены прокси...');
-            
             const newProxy = rotateProxyPort();
-            if (newProxy && newProxy !== currentProxyUrl) {
-                proxyAgent = newProxy.startsWith('socks') 
-                    ? new SocksProxyAgent(newProxy)
-                    : new HttpsProxyAgent(newProxy);
-                currentProxyUrl = newProxy;
-                
-                console.log('✅ Прокси заменен');
-                await sendTelegram('🔄 Прокси заменен из-за ошибки');
+            if (newProxy) {
+                const result = await testProxy(newProxy);
+                if (result && result.working) {
+                    proxyAgent = result.agent;
+                    currentProxyUrl = newProxy;
+                    console.log('✅ Прокси заменен');
+                }
             }
         }
     });
     
-    // ===== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА =====
-    async function checkAll() {
-        await checkTelegramCommands();
-        
-        const items = await parseSeedChannel();
-        
-        if (items && items.length > 0 && botEnabled) {
-            const found = checkTargetItems(items);
-            
-            if (found.length > 0) {
-                stats.targetFound += found.length;
-                console.log('⚠️ Polling: найдены целевые предметы в пропущенном сообщении');
-                
-                const time = new Date().toLocaleTimeString();
-                let messageText = `⚠️ <b>Внимание! Найдены предметы (пропущенный сток) в ${time}</b>\n\n`;
-                
-                for (const item of items) {
-                    const isTarget = found.some(f => f.display_name === item.name);
-                    const emoji = isTarget ? '✅ ' : '';
-                    messageText += `${emoji}• ${item.name} — ${item.count}\n`;
-                }
-                
-                for (const item of found) {
-                    if (item.sticker_id) {
-                        await sendTelegramSticker(item.sticker_id);
-                    }
-                }
-                
-                await sendTelegram(messageText);
-            }
+    // Отладочная информация
+    client.on('debug', (info) => {
+        if (info.includes('HTTP') || info.includes('CONNECT') || info.includes('WebSocket')) {
+            console.log('🔍 Debug:', info);
         }
-    }
-    
-    // ===== ПАРСИНГ КАНАЛА =====
-    async function parseSeedChannel() {
-        try {
-            const channel = await client.channels.fetch(STOCKS_CHANNEL_ID);
-            if (!channel) return null;
-            
-            const messages = await channel.messages.fetch({ limit: 1 });
-            const msg = messages.first();
-            
-            if (!msg || !msg.components || !msg.components.length) {
-                return null;
-            }
-            
-            const messageAge = Date.now() - msg.createdTimestamp;
-            const maxAge = 5 * 60 * 1000;
-            
-            if (messageAge > maxAge) {
-                return null;
-            }
-            
-            if (processedIds.includes(msg.id)) {
-                return null;
-            }
-            
-            const text = extractTextFromComponents(msg.components);
-            const lines = text.split('\n');
-            const items = [];
-            
-            for (const line of lines) {
-                const match = line.match(/<@&(\d+)>\s*\(x(\d+)\)/);
-                if (match) {
-                    const roleId = match[1];
-                    const count = parseInt(match[2]);
-                    const name = await findRoleName(roleId);
-                    
-                    if (name) {
-                        items.push({ 
-                            name: name, 
-                            count: count,
-                            roleId: roleId
-                        });
-                    }
-                }
-            }
-            
-            return items.length ? items : null;
-            
-        } catch (error) {
-            console.error('❌ Ошибка парсинга:', error.message);
-            return null;
-        }
-    }
-    
-    // ===== ОБРАБОТКА ОТКЛЮЧЕНИЯ =====
-    client.on('disconnect', async (event) => {
-        const errorMsg = event?.reason || 'Неизвестная причина';
-        console.log(`⚠️ WebSocket отключен! Причина: ${errorMsg}`);
-        lastError = `Отключение: ${errorMsg}`;
-        await sendTelegram(`⚠️ <b>WebSocket отключен</b>\nПричина: ${errorMsg}\nПопытка ${reconnectAttempts + 1}`);
-        reconnectAttempts++;
     });
     
-    // ===== ДИАГНОСТИКА WEBSOCKET =====
-    client.ws.on('shardReady', async (shardId) => {
-        console.log(`✅ Шард ${shardId} готов`);
-        errorCount = 0;
-        reconnectAttempts = 0;
-        lastError = null;
-        await sendTelegram(`✅ WebSocket шард ${shardId} готов к работе`);
-    });
-    
-    client.ws.on('shardResumed', async (shardId, replayed) => {
-        console.log(`🔄 Шард ${shardId} возобновил работу, пропущено событий: ${replayed}`);
-        await sendTelegram(`🔄 WebSocket возобновил работу\nПропущено событий: ${replayed}`);
-    });
-    
-    client.ws.on('shardDisconnect', async (event, shardId) => {
-        const closeCode = event?.code || 'неизвестный код';
-        const reason = event?.reason || 'без объяснения';
-        console.log(`⚠️ Шард ${shardId} отключен. Код: ${closeCode}, Причина: ${reason}`);
-        lastError = `Шард ${shardId} отключен. Код: ${closeCode}`;
-        await sendTelegram(`⚠️ <b>WebSocket шард ${shardId} отключен</b>\nКод: ${closeCode}\nПричина: ${reason}`);
-    });
-    
-    // ===== УСИЛЕННЫЙ МОНИТОРИНГ СОЕДИНЕНИЯ =====
+    // Запускаем диагностику каждые 5 минут
     setInterval(async () => {
-        try {
-            if (!client.ws) {
-                console.log('⚠️ WebSocket менеджер недоступен');
-                return;
-            }
-            
-            const shard = client.ws.shards?.first();
-            
-            if (!shard) {
-                console.log('⚠️ Нет активных шардов');
-                return;
-            }
-            
-            const status = shard.status;
-            const ping = shard.ping;
-            
-            const statusMap = {
-                0: 'CONNECTING',
-                1: 'CONNECTED',
-                2: 'RECONNECTING',
-                3: 'IDLE',
-                4: 'NEARLY',
-                5: 'DISCONNECTED'
-            };
-            
-            console.log(`📡 Шард статус: ${statusMap[status] || status}, пинг: ${ping || 'N/A'}ms`);
-            
-            if (status === 5 || (status === 2 && reconnectAttempts > 3)) {
-                console.log('🔄 Обнаружена критическая проблема, перезапускаю шард...');
-                await sendTelegram(`🔄 Критическая проблема WebSocket\nСтатус: ${statusMap[status]}\nПопыток: ${reconnectAttempts}`);
-                shard.destroy({ reset: true });
-                reconnectAttempts++;
-            }
-            
-            errorCount = 0;
-            
-        } catch (error) {
-            console.error('❌ Ошибка мониторинга:', error.message);
-            lastError = `Мониторинг: ${error.message}`;
-            errorCount++;
-            
-            if (errorCount > 5) {
-                console.log('🔥 Критическая ошибка мониторинга, выполняю перезапуск...');
-                await sendTelegram('🔥 Критическая ошибка мониторинга, перезапускаюсь...');
-                process.exit(1);
-            }
-        }
-    }, 30000);
+        await runDiagnostics(proxyAgent);
+    }, 300000);
     
     // Запускаем клиента
+    console.log('\n🚀 Подключение к Discord...');
     client.login(process.env.USER_TOKEN);
 }
 
-// ===== ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ ОШИБОК =====
-process.on('uncaughtException', async (error) => {
+// ===== ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ =====
+process.on('uncaughtException', (error) => {
     console.error('💥 Непойманная ошибка:', error);
     stats.errors++;
-    await sendTelegram(`💥 <b>Критическая ошибка</b>\n${error.message}`);
-    
-    // Пробуем перезапустить через 30 секунд
-    setTimeout(() => {
-        console.log('🔄 Перезапуск после критической ошибки...');
-        process.exit(1);
-    }, 30000);
 });
 
-process.on('unhandledRejection', async (error) => {
+process.on('unhandledRejection', (error) => {
     console.error('💥 Unhandled Rejection:', error);
     stats.errors++;
-    await sendTelegram(`💥 <b>Unhandled Rejection</b>\n${error.message}`);
 });
 
 // ===== ЗАПУСК =====
 startBot().catch(error => {
     console.error('❌ Ошибка запуска:', error);
-    process.exit(1);
 });
